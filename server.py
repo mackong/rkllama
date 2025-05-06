@@ -92,10 +92,16 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
     load_dotenv(os.path.join(model_dir, "Modelfile"), override=True)
     
     from_value = os.getenv("FROM")
+    image_emb_value = os.getenv("IMAGE_EMB_PATH")
+    image_emb_model_path = os.path.join(model_dir, image_emb_value) if image_emb_value else None
+    image_encoder_bin = os.getenv("IMAGE_ENCODER_BIN")
     huggingface_path = os.getenv("HUGGINGFACE_PATH")
 
     # View config Vars
-    print_color(f"FROM: {from_value}\nHuggingFace Path: {huggingface_path}", "green")
+    print_color(f"FROM: {from_value}", "green")
+    print_color(f"IMAGE_EMB_PATH: {image_emb_value}", "green")
+    print_color(f"IMAGE_ENCODER_BIn: {image_encoder_bin}", "green")
+    print_color(f"HuggingFace Path: {huggingface_path}", "green")
     
     if not from_value or not huggingface_path:
         return None, "FROM or HUGGINGFACE_PATH not defined in Modelfile."
@@ -104,7 +110,11 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
     variables.model_id = huggingface_path
 
     
-    modele_rkllm = RKLLM(os.path.join(model_dir, from_value))
+    modele_rkllm = RKLLM(
+        os.path.join(model_dir, from_value),
+        image_emb_model_path=image_emb_model_path,
+        image_encoder_bin=image_encoder_bin,
+    )
     return modele_rkllm, None
 
 def unload_model():
@@ -817,6 +827,7 @@ def generate_ollama():
         prompt = data.get('prompt')
         system = data.get('system', '')
         stream = data.get('stream', True)
+        images = data.get('images', [])
         
         # Support format options for structured JSON output
         format_spec = data.get('format')
@@ -864,7 +875,8 @@ def generate_ollama():
             system=system,
             stream=stream,
             format_spec=format_spec,
-            options=options
+            options=options,
+            images=images
         )
     except Exception as e:
         if DEBUG_MODE:

@@ -9,6 +9,7 @@ from flask import jsonify, Response
 import src.variables as variables
 from src.model_utils import get_simplified_model_name
 from .format_utils import create_format_instruction, validate_format_response
+from .image_utils import read_img_emb
 
 # Check for debug mode
 DEBUG_MODE = os.environ.get("RKLLAMA_DEBUG", "0").lower() in ["1", "true", "yes", "on"]
@@ -47,7 +48,8 @@ class EndpointHandler:
             prompt_messages = messages
         
         prompt_tokens = tokenizer.apply_chat_template(prompt_messages, tokenize=True, add_generation_prompt=True)
-        return tokenizer, prompt_tokens, len(prompt_tokens)
+        prompt = tokenizer.decode(prompt_tokens)
+        return tokenizer, prompt, prompt_tokens, len(prompt_tokens)
     
     @staticmethod
     def calculate_durations(start_time, prompt_eval_time, current_time=None):
@@ -144,22 +146,34 @@ class ChatEndpointHandler(EndpointHandler):
                             messages[i]["content"] += format_instruction
                             break
             
-            tokenizer, prompt_tokens, prompt_token_count = cls.prepare_prompt(messages, system)
+            # TODO: multiple images?
+            images = messages[-1].get("images", [])
+            if images:
+                # Must have "<image>" token added.
+                messages[-1]["content"] = "<image>" + messages[-1]["content"]
+                img_emb = read_img_emb(
+                    images[0],
+                    modele_rkllm.image_emb_model_path,
+                    modele_rkllm.image_encoder_bin
+                )
+            else:
+                img_emb = None
+            tokenizer, prompt, prompt_tokens, prompt_token_count = cls.prepare_prompt(messages, system)
             
             if stream:
-                return cls.handle_streaming(modele_rkllm, simplified_model_name, prompt_tokens, 
-                                          prompt_token_count, format_spec)
+                return cls.handle_streaming(modele_rkllm, simplified_model_name, prompt,
+                                          prompt_token_count, format_spec, img_emb=img_emb)
             else:
-                return cls.handle_complete(modele_rkllm, simplified_model_name, prompt_tokens, 
-                                         prompt_token_count, format_spec)
+                return cls.handle_complete(modele_rkllm, simplified_model_name, prompt,
+                                         prompt_token_count, format_spec, img_emb=img_emb)
         finally:
             variables.system = original_system
             
     @classmethod
-    def handle_streaming(cls, modele_rkllm, model_name, prompt_tokens, prompt_token_count, format_spec):
+    def handle_streaming(cls, modele_rkllm, model_name, prompt, prompt_token_count, format_spec, img_emb=None):
         """Handle streaming chat response"""
         def generate():
-            thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt_tokens,))
+            thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
             thread_model.start()
             
             count = 0
@@ -222,12 +236,12 @@ class ChatEndpointHandler(EndpointHandler):
         return Response(generate(), content_type='application/x-ndjson')
     
     @classmethod
-    def handle_complete(cls, modele_rkllm, model_name, prompt_tokens, prompt_token_count, format_spec):
+    def handle_complete(cls, modele_rkllm, model_name, prompt, prompt_token_count, format_spec, img_emb=None):
         """Handle complete non-streaming chat response"""
         start_time = time.time()
         prompt_eval_time = None
         
-        thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt_tokens,))
+        thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
         thread_model.start()
         
         count = 0
@@ -316,9 +330,19 @@ class GenerateEndpointHandler(EndpointHandler):
         return response
     
     @classmethod
-    def handle_request(cls, modele_rkllm, model_name, prompt, system="", stream=True, format_spec=None, options=None):
+    def handle_request(cls, modele_rkllm, model_name, prompt, system="", stream=True, format_spec=None, options=None, images=None):
         """Process a generate request with proper format handling"""
         messages = [{"role": "user", "content": prompt}]
+        # TODO: multiple images?
+        if images:
+            messages[-1]["content"] = "<image>" + messages[-1]["content"]
+            img_emb = read_img_emb(
+                images[0],
+                modele_rkllm.image_emb_model_path,
+                modele_rkllm.image_encoder_bin
+            )
+        else:
+            img_emb = None
         
         simplified_model_name = get_simplified_model_name(model_name)
         
@@ -340,22 +364,22 @@ class GenerateEndpointHandler(EndpointHandler):
                         logger.debug(f"Adding format instruction to prompt: {format_instruction}")
                     messages[0]["content"] += format_instruction
             
-            tokenizer, prompt_tokens, prompt_token_count = cls.prepare_prompt(messages, system)
+            tokenizer, prompt, prompt_tokens, prompt_token_count = cls.prepare_prompt(messages, system)
             
             if stream:
-                return cls.handle_streaming(modele_rkllm, simplified_model_name, prompt_tokens, 
-                                          prompt_token_count, format_spec)
+                return cls.handle_streaming(modele_rkllm, simplified_model_name, prompt,
+                                          prompt_token_count, format_spec, img_emb=img_emb)
             else:
-                return cls.handle_complete(modele_rkllm, simplified_model_name, prompt_tokens, 
-                                         prompt_token_count, format_spec)
+                return cls.handle_complete(modele_rkllm, simplified_model_name, prompt,
+                                         prompt_token_count, format_spec, img_emb=img_emb)
         finally:
             variables.system = original_system
     
     @classmethod
-    def handle_streaming(cls, modele_rkllm, model_name, prompt_tokens, prompt_token_count, format_spec):
+    def handle_streaming(cls, modele_rkllm, model_name, prompt, prompt_token_count, format_spec, img_emb=None):
         """Handle streaming generate response"""
         def generate():
-            thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt_tokens,))
+            thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
             thread_model.start()
             
             count = 0
@@ -418,12 +442,12 @@ class GenerateEndpointHandler(EndpointHandler):
         return Response(generate(), content_type='application/x-ndjson')
     
     @classmethod
-    def handle_complete(cls, modele_rkllm, model_name, prompt_tokens, prompt_token_count, format_spec):
+    def handle_complete(cls, modele_rkllm, model_name, prompt, prompt_token_count, format_spec, img_emb=None):
         """Handle complete generate response"""
         start_time = time.time()
         prompt_eval_time = None
         
-        thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt_tokens,))
+        thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
         thread_model.start()
         
         count = 0

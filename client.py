@@ -1,3 +1,4 @@
+import base64
 import requests
 import json
 import sys
@@ -8,6 +9,7 @@ CONFIG_FILE = os.path.expanduser("~/RKLLAMA/rkllama.ini")
 STREAM_MODE = True
 VERBOSE = False
 HISTORY = []
+IMAGE = None
 PREFIX_MESSAGE = "<|im_start|>system You are a helpful assistant. <|im_end|> <|im_start|>user"
 SUFFIX_MESSAGE = "<|im_end|><|im_start|>assistant"
 
@@ -58,7 +60,23 @@ def print_help_chat():
     print(f"{YELLOW}/set verbose{RESET}    : Enables verbose mode.")
     print(f"{YELLOW}/unset verbose{RESET}  : Disables verbose mode.")
     print(f"{YELLOW}/set system{RESET}     : Modifies the system message.")
+    print(f"{YELLOW}/image image{RESET}    : Set image.")
+    print(f"{YELLOW}/noimage{RESET}        : Clear image.")
     print(f"{YELLOW}exit{RESET}            : Exits the conversation.\n")
+
+
+def image_to_base64(image_path):
+    try:
+        if not os.path.exists(image_path):
+            raise FileNotFoundError(f"File not found: {image_path}")
+
+        if not os.access(image_path, os.R_OK):
+            raise PermissionError(f"No read permissions for file: {image_path}")
+
+        with open(image_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Failed to encode image: {str(e)}")
 
 
 # Check status of rkllama API
@@ -121,7 +139,8 @@ def unload_model():
 def send_message(message):
     global HISTORY
 
-    HISTORY.append({"role": "user", "content": message})
+    images = [IMAGE] if IMAGE else []
+    HISTORY.append({"role": "user", "content": message, "images": images})
 
     # if VERBOSE == True:
     #     print(HISTORY)
@@ -269,7 +288,7 @@ def pull_model(model):
 
 # Interactive function for chatting with the model.
 def chat():
-    global VERBOSE, STREAM_MODE, HISTORY, PREFIX_MESSAGE
+    global VERBOSE, STREAM_MODE, HISTORY, PREFIX_MESSAGE, IMAGE
     os.system("clear")
     print_help_chat()
     
@@ -301,7 +320,17 @@ def chat():
         elif user_input == "/set system":
             system_prompt = input(f"{CYAN}System prompt: {RESET}")
             PREFIX_MESSAGE = f"<|im_start|>{system_prompt}<|im_end|> <|im_start|>user"
-            print(f"{GREEN}System message successfully modified!")
+            print(f"{GREEN}System message successfully modified!{RESET}")
+        elif user_input == "/image":
+            image_path = input(f"{CYAN}Image path: {RESET}")
+            try:
+                IMAGE = image_to_base64(image_path)
+                print(f"{GREEN}Image successfully modified!{RESET}")
+            except Exception as e:
+                print(f"{RED}Image failed modified!{RESET}")
+        elif user_input == "/noimage":
+            IMAGE = None
+            print(f"{GREEN}Image successfully cleared!{RESET}")
         else:
             # If content is not a command, then send content to template
             send_message(user_input)
