@@ -8,7 +8,7 @@ callback = callback_type(callback_impl)
 
 # Définir la classe RKLLM, qui inclut l'initialisation, l'inférence et les opérations de libération pour le modèle RKLLM dans la bibliothèque dynamique
 class RKLLM(object):
-    def __init__(self, model_path, lora_model_path = None, prompt_cache_path = None, image_emb_model_path = None, image_encoder_bin = None):
+    def __init__(self, model_path, lora_model_path = None, prompt_cache_path = None):
         
         self.format_schema = None
         self.format_type = None
@@ -81,9 +81,6 @@ class RKLLM(object):
             rkllm_load_prompt_cache.restype = ctypes.c_int
             rkllm_load_prompt_cache(self.handle, ctypes.c_char_p((prompt_cache_path).encode('utf-8')))
 
-        self.image_emb_model_path = image_emb_model_path
-        self.image_encoder_bin = image_encoder_bin
-
     def tokens_to_ctypes_array(self, tokens, ctype):
         return (ctype * len(tokens))(*tokens)
 
@@ -99,7 +96,7 @@ class RKLLM(object):
         rkllm_infer_params.lora_params = ctypes.byref(rkllm_lora_params) if rkllm_lora_params else None
 
         rkllm_input = RKLLMInput()
-        if image_embed is None or self.image_emb_model_path is None or self.image_encoder_bin is None:
+        if image_embed is None:
             rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_PROMPT
             rkllm_input.input_data.prompt_input = ctypes.c_char_p(prompt.encode("utf-8"))
         else:
@@ -107,7 +104,7 @@ class RKLLM(object):
             rkllm_input.input_data.multimodal_input.prompt = ctypes.c_char_p(prompt.encode("utf-8"))
             rkllm_input.input_data.multimodal_input.image_embed = image_embed.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
             # TODO: make these configuable?
-            # See rknn-llm/examples/rkllm_multimodel_demo/deploy/src/img_encoder.cpp
+            # See bin/img_encoder.cpp
             rkllm_input.input_data.multimodal_input.n_image_tokens = 196
             rkllm_input.input_data.multimodal_input.image_height = 392
             rkllm_input.input_data.multimodal_input.image_with = 392

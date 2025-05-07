@@ -9,7 +9,6 @@ from flask import jsonify, Response
 import src.variables as variables
 from src.model_utils import get_simplified_model_name
 from .format_utils import create_format_instruction, validate_format_response
-from .image_utils import read_img_emb
 
 # Check for debug mode
 DEBUG_MODE = os.environ.get("RKLLAMA_DEBUG", "0").lower() in ["1", "true", "yes", "on"]
@@ -127,7 +126,7 @@ class ChatEndpointHandler(EndpointHandler):
         return response
         
     @classmethod
-    def handle_request(cls, modele_rkllm, model_name, messages, system="", stream=True, format_spec=None, options=None):
+    def handle_request(cls, modele_rkllm, model_name, messages, system="", stream=True, format_spec=None, options=None, img_encoder=None):
         """Process a chat request with proper format handling"""
         simplified_model_name = get_simplified_model_name(model_name)
         
@@ -148,14 +147,10 @@ class ChatEndpointHandler(EndpointHandler):
             
             # TODO: multiple images?
             images = messages[-1].get("images", [])
-            if images:
+            if images and img_encoder:
                 # Must have "<image>" token added.
                 messages[-1]["content"] = "<image>" + messages[-1]["content"]
-                img_emb = read_img_emb(
-                    images[0],
-                    modele_rkllm.image_emb_model_path,
-                    modele_rkllm.image_encoder_bin
-                )
+                img_emb = img_encoder.encode_image(images[0])
             else:
                 img_emb = None
             tokenizer, prompt, prompt_tokens, prompt_token_count = cls.prepare_prompt(messages, system)
@@ -330,17 +325,13 @@ class GenerateEndpointHandler(EndpointHandler):
         return response
     
     @classmethod
-    def handle_request(cls, modele_rkllm, model_name, prompt, system="", stream=True, format_spec=None, options=None, images=None):
+    def handle_request(cls, modele_rkllm, model_name, prompt, system="", stream=True, format_spec=None, options=None, img_encoder=None, images=None):
         """Process a generate request with proper format handling"""
         messages = [{"role": "user", "content": prompt}]
         # TODO: multiple images?
-        if images:
+        if images and img_encoder:
             messages[-1]["content"] = "<image>" + messages[-1]["content"]
-            img_emb = read_img_emb(
-                images[0],
-                modele_rkllm.image_emb_model_path,
-                modele_rkllm.image_encoder_bin
-            )
+            img_emb = img_encoder.encode_image(images[0])
         else:
             img_emb = None
         
@@ -549,7 +540,7 @@ class GenerateEndpointHandler(EndpointHandler):
         return jsonify(response), 200
 
 
-def process_ollama_chat_request(modele_rkllm, model_name, messages, system="", stream=True, format_spec=None, options=None):
+def process_ollama_chat_request(modele_rkllm, model_name, messages, system="", stream=True, format_spec=None, options=None, img_encoder=None):
     """Process /api/chat request with correct format"""
     return ChatEndpointHandler.handle_request(
         modele_rkllm=modele_rkllm,
@@ -558,10 +549,11 @@ def process_ollama_chat_request(modele_rkllm, model_name, messages, system="", s
         system=system,
         stream=stream,
         format_spec=format_spec,
-        options=options
+        options=options,
+        img_encoder=img_encoder,
     )
 
-def process_ollama_generate_request(modele_rkllm, model_name, prompt, system="", stream=True, format_spec=None, options=None):
+def process_ollama_generate_request(modele_rkllm, model_name, prompt, system="", stream=True, format_spec=None, options=None, img_encoder=None, images=None):
     """Process /api/generate request with correct format"""
     return GenerateEndpointHandler.handle_request(
         modele_rkllm=modele_rkllm,
@@ -570,5 +562,7 @@ def process_ollama_generate_request(modele_rkllm, model_name, prompt, system="",
         system=system,
         stream=stream,
         format_spec=format_spec,
-        options=options
+        options=options,
+        img_encoder=img_encoder,
+        images=images,
     )

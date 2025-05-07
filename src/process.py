@@ -6,7 +6,6 @@ import datetime
 import logging
 import os  # For accessing environment variables
 from .format_utils import create_format_instruction, validate_format_response
-from .image_utils import read_img_emb
 from src.model_utils import get_simplified_model_name  # Import at the top level
 
 logger = logging.getLogger("rkllama.process")
@@ -14,7 +13,7 @@ logger = logging.getLogger("rkllama.process")
 # Import DEBUG_MODE setting from environment variables
 DEBUG_MODE = os.environ.get("RKLLAMA_DEBUG", "0").lower() in ["1", "true", "yes", "on"]
 
-def Request(modele_rkllm, custom_request=None):
+def Request(modele_rkllm, img_encoder=None, custom_request=None):
     """
     Process a request to the language model
     
@@ -101,14 +100,10 @@ def Request(modele_rkllm, custom_request=None):
 
             # TODO: multiple images?
             images = messages[-1].get("images", [])
-            if images:
+            if images and img_encoder:
                 # Must have "<image"> token added.
                 prompt[-1]["content"] = "<image>" + prompt[-1]["content"]
-                img_emb = read_img_emb(
-                    images[0],
-                    modele_rkllm.image_emb_model_path,
-                    modele_rkllm.image_encoder_bin
-                )
+                img_emb = img_encoder.encode_image(images[0])
             else:
                 img_emb = None
             # Mise en place du chat Template
