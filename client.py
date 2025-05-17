@@ -5,7 +5,8 @@ import sys
 import os
 import configparser
 
-CONFIG_FILE = os.path.expanduser("~/RKLLAMA/rkllama.ini")
+import config
+
 STREAM_MODE = True
 VERBOSE = False
 HISTORY = []
@@ -20,19 +21,7 @@ GREEN = "\033[32m"
 YELLOW = "\033[33m"
 CYAN = "\033[36m"
 
-
-if not os.path.exists(CONFIG_FILE):
-    print("Configuration file not found. Creating with default values...")
-    config = configparser.ConfigParser()
-    config["server"] = {"port": "8080"}
-    with open(CONFIG_FILE, "w") as configfile:
-        config.write(configfile)
-
-config = configparser.ConfigParser()
-config.read(CONFIG_FILE)
-
-
-PORT = config["server"].get("port", "8080")
+PORT = config.get("server", "port")
 API_URL = f"http://127.0.0.1:{PORT}/"
 
 
@@ -43,6 +32,7 @@ def print_help():
     print(f"{YELLOW}update{RESET}                   : Checks for available updates and upgrades.")
     print(f"{YELLOW}serve{RESET}                    : Starts the server.")
     print(f"{YELLOW}list{RESET}                     : Lists all available models on the server.")
+    print(f"{YELLOW}info{RESET}                     : Show informations for a specific model.")
     print(f"{YELLOW}pull hf/model/file.rkllm{RESET} : Downloads a model via a file from Hugging Face.")
     print(f"{YELLOW}rm model.rkllm{RESET}           : Remove the model.")
     print(f"{YELLOW}load model.rkllm{RESET}         : Loads a specific model.")
@@ -251,7 +241,7 @@ def pull_model(model):
         repo = input(f"{CYAN}Repo ID{RESET} ( example: punchnox/Tinnyllama-1.1B-rk3588-rkllm-1.1.4 ): ")
         filename = input(f"{CYAN}File{RESET} ( example: TinyLlama-1.1B-Chat-v1.0-rk3588-w8a8-opt-0-hybrid-ratio-0.5.rkllm ): ")
 
-    model = repo + "/" + filename
+        model = repo + "/" + filename
 
     try:
         response = requests.post(API_URL + "pull", json={"model": model}, stream=True)
@@ -336,7 +326,7 @@ def chat():
             send_message(user_input)
 
 def update():
-    setup_path = os.path.expanduser('~/RKLLAMA/setup.sh')
+    setup_path = os.path.join(config.get_path(), 'setup.sh')
     
     # Check if setup.sh exists
     if not os.path.exists(setup_path):
@@ -356,12 +346,77 @@ def update():
     os.system('git pull')
     os.system(f'bash {setup_path}')
 
+def show_model_info(model_name):
+    try:
+        # Préparer les données pour la requête POST
+        data = {"name": model_name}
+        
+        # Envoyer la requête POST à l'endpoint /api/show
+        response = requests.post(API_URL + "api/show", json=data)
+        
+        if response.status_code == 200:
+            model_info = response.json()
+            
+            # Afficher les informations du modèle de manière formatée
+            print(f"{GREEN}{BOLD}Model Information: {model_info['name']}{RESET}")
+            print(f"{'-' * 50}")
+            print(f"{BOLD}Family:{RESET} {model_info['details']['family']}")
+            print(f"{BOLD}Parameter Size:{RESET} {model_info['parameters']}")
+            print(f"{BOLD}Quantization Level:{RESET} {model_info['details']['quantization_level']}")
+            print(f"{BOLD}Size:{RESET} {model_info['size'] / (1024**3):.2f} GB")
+            print(f"{BOLD}Modified At:{RESET} {model_info['modified_at']}")
+            print(f"{BOLD}License:{RESET} {model_info['license']}")
+            print(f"{BOLD}System Prompt:{RESET} {model_info['system'] or 'None'}")
+            print(f"{BOLD}Template:{RESET} {model_info['template']}")
+            
+            # Afficher les informations Hugging Face si disponibles
+            if "huggingface" in model_info:
+                print(f"{BOLD}Hugging Face Info:{RESET}")
+                print(f"  Repo ID: {model_info['huggingface']['repo_id']}")
+                print(f"  Description: {model_info['huggingface']['description'][:100]}{'...' if len(model_info['huggingface']['description']) > 100 else ''}")
+                print(f"  Tags: {', '.join(model_info['huggingface']['tags'][:5])}")
+                print(f"  Downloads: {model_info['huggingface']['downloads']}")
+                print(f"  Likes: {model_info['huggingface']['likes']}")
+            
+            # Afficher les informations avancées du modèle
+            print(f"{BOLD}Advanced Model Info:{RESET}")
+            for key, value in model_info['model_info'].items():
+                print(f"  {key}: {value}")
+            
+        elif response.status_code == 400:
+            print(f"{RED}Error: Missing model name{RESET}")
+        elif response.status_code == 404:
+            print(f"{RED}Error: Model '{model_name}' not found{RESET}")
+        else:
+            print(f"{RED}Error retrieving model info: {response.status_code} - {response.text}{RESET}")
+            
+    except requests.RequestException as e:
+        print(f"{RED}Query error: {e}{RESET}")
+
 
 def main():
-    global PORT
+    global PORT, API_URL
 
     use_no_conda = "--no-conda" in sys.argv
     sys.argv = [arg for arg in sys.argv if arg != "--no-conda"]
+
+    # Parse host and port from command line arguments
+    host = "127.0.0.1"  # default host
+    filtered_args = []
+    
+    for arg in sys.argv:
+        if arg.startswith("--host="):
+            host = arg.split("=")[1]
+        elif arg.startswith("--port="):
+            PORT = arg.split("=")[1]
+        else:
+            filtered_args.append(arg)
+    
+    # Update sys.argv with filtered arguments
+    sys.argv = filtered_args
+
+    # Update API_URL with the correct host and port
+    API_URL = f"http://{host}:{PORT}/"
 
     # Check minimum number of entries
     if len(sys.argv) < 2:
@@ -371,7 +426,7 @@ def main():
     command = sys.argv[1]
 
     if check_status() != 200 and command not in ['serve', 'update']:
-        print(f"{RED}Error: Server not started!\n{RESET}rkllama serve{CYAN} command to start the server.{RESET}")
+        print(f"{RED}Error: Server not started or not accessible at {API_URL}!\n{RESET}rkllama serve{CYAN} command to start the server.{RESET}")
         sys.exit(0)
 
     # Start of condition sequence
@@ -379,24 +434,24 @@ def main():
         print_help()
 
     elif command == "serve":
-
         if len(sys.argv) > 2:
             PORT = sys.argv[2]
 
-        os.system(f"bash ~/RKLLAMA/server.sh {"--no-conda" if use_no_conda else ""} --port={PORT}")
+        server_script = os.path.join(config.get_path(), 'server.sh')
+        os.system(f"bash {server_script} {'--no-conda' if use_no_conda else ''} --port={PORT}")
 
     elif command == "update":
         update()
 
-    elif command =="list":
+    elif command == "list":
         list_models()
 
-    elif command == "load_model":
+    elif command == "load":
         if len(sys.argv) < 3:
             print(f"{RED}Error: You must specify the model name.{RESET}")
         else:
             load_model(sys.argv[2])
-    
+
     elif command == "unload":
         unload_model()
 
@@ -410,14 +465,20 @@ def main():
         chat()
             
     elif command == "rm":
-        if sys.argv[2] is None:
+        if len(sys.argv) < 3:
             print(f"{RED}Error: You must specify the model name.{RESET}")
         else:
             remove_model(sys.argv[2])
     
     elif command == "pull":
-        pull_model(sys.argv[2] if len(sys.argv) < 2 else "" )
+        pull_model(sys.argv[2] if len(sys.argv) > 2 else "")
     
+    elif command == "info":
+        if len(sys.argv) < 3:
+            print(f"{RED}Error: You must specify the model name.{RESET}")
+        else:
+            show_model_info(sys.argv[2])
+
     else:
         print(f"{RED}Unknown command: {command}.{RESET}")
         print_help()

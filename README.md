@@ -1,6 +1,6 @@
 # RKLLama: LLM Server and Client for Rockchip 3588/3576
 
-### [Version: 0.0.4](#New-Version)
+### [Version: 0.0.41](#New-Version)
 
 Video demo ( version 0.0.1 ):
 
@@ -72,14 +72,14 @@ cd rkllama
 
 ```bash
 chmod +x setup.sh
-sudo ./setup.sh
+./setup.sh
 ```
 
 **Output:**
 ![Image](./documentation/ressources/setup.png)
 
 
-###  Rkllama-Server Docker Installation
+### Docker Installation
 
 Pull the RKLLama Docker image:
 
@@ -92,6 +92,14 @@ docker run -it --privileged -p 8080:8080 ghcr.io/notpunchnox/rkllama:main
 ```
 
 *Set up by: [ichlaffterlalu](https://github.com/ichlaffterlalu)*
+
+#### Docker Compose
+
+Docker Compose facilities much of the extra flags declaration such as volumes:
+
+```bash
+docker compose up --detach --remove-orphans
+```
 
 ## Usage
 
@@ -185,6 +193,8 @@ This will automatically download the specified model file and prepare it for use
     SYSTEM="Your system prompt"
 
     TEMPERATURE=1.0
+
+    TOKENIZER="path-to-tokenizer"
     ```
 
    Example directory structure:
@@ -196,6 +206,12 @@ This will automatically download the specified model file and prepare it for use
    ```
 
    *You must provide a link to a HuggingFace repository to retrieve the tokenizer and chattemplate. An internet connection is required for the tokenizer initialization (only once), and you can use a repository different from that of the model as long as the tokenizer is compatible and the chattemplate meets your needs.*
+
+## Configuration
+
+RKLLAMA uses a flexible configuration system that loads settings from multiple sources in a priority order:
+
+See the [Configuration Documentation](documentation/configuration.md) for complete details.
 
 ## Uninstall
 
@@ -269,3 +285,4 @@ System Monitor:
 
 *  [**ichlaffterlalu**](https://github.com/ichlaffterlalu): Contributed with a pull request for [Docker-Rkllama](https://github.com/NotPunchnox/rkllama/tree/Rkllama-Docker) and fixed multiple errors.
 *  [**TomJacobsUK**](https://github.com/TomJacobsUK): Contributed with pull requests for Ollama API compatibility and model naming improvements, and fixed CPU detection errors.
+*  [**Yoann Vanitou**](https://github.com/yvanitou): Contributed with Docker implementation improvements and fixed merge conflicts.

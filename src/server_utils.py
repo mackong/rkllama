@@ -4,14 +4,17 @@ import time
 import datetime
 import logging
 import os
+import re  # Add import for regex used in JSON extraction
 from transformers import AutoTokenizer
 from flask import jsonify, Response
 import src.variables as variables
 from src.model_utils import get_simplified_model_name
-from .format_utils import create_format_instruction, validate_format_response
+from .format_utils import create_format_instruction, validate_format_response, get_tool_calls
 
-# Check for debug mode
-DEBUG_MODE = os.environ.get("RKLLAMA_DEBUG", "0").lower() in ["1", "true", "yes", "on"]
+import config
+
+# Check for debug mode using the improved method from config
+DEBUG_MODE = config.is_debug_mode()
 
 # Set up logging based on debug mode
 logging_level = logging.DEBUG if DEBUG_MODE else logging.INFO
@@ -20,7 +23,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler(os.path.expanduser("~/RKLLAMA/rkllama_debug.log")) if DEBUG_MODE else logging.NullHandler()
+        logging.FileHandler(os.path.join(config.get_path("logs"),'rkllama_debug.log')) if DEBUG_MODE else logging.NullHandler()
     ]
 )
 logger = logging.getLogger("rkllama.server_utils")
@@ -36,7 +39,7 @@ class EndpointHandler:
     """Base class for endpoint handlers with common functionality"""
     
     @staticmethod
-    def prepare_prompt(messages, system=""):
+    def prepare_prompt(messages, system="", tools=None):
         """Prepare prompt with proper system handling"""
         tokenizer = AutoTokenizer.from_pretrained(variables.model_id, trust_remote_code=True)
         supports_system_role = "raise_exception('System role not supported')" not in tokenizer.chat_template
@@ -46,7 +49,7 @@ class EndpointHandler:
         else:
             prompt_messages = messages
         
-        prompt_tokens = tokenizer.apply_chat_template(prompt_messages, tokenize=True, add_generation_prompt=True)
+        prompt_tokens = tokenizer.apply_chat_template(prompt_messages, tools=tools, tokenize=True, add_generation_prompt=True)
         prompt = tokenizer.decode(prompt_tokens)
         return tokenizer, prompt, prompt_tokens, len(prompt_tokens)
     
@@ -70,8 +73,7 @@ class EndpointHandler:
             "eval": int(eval_duration * 1_000_000_000),
             "load": int(0.1 * 1_000_000_000)
         }
-
-
+    
 class ChatEndpointHandler(EndpointHandler):
     """Handler for /api/chat endpoint requests"""
     
@@ -122,11 +124,14 @@ class ChatEndpointHandler(EndpointHandler):
             "eval_count": metrics.get("token_count", 0),
             "eval_duration": metrics["eval"]
         }
+
+        if format_data and "tool_call" in format_data:
+            response["message"]["tool_calls"] = format_data["tool_call"]
         
         return response
         
     @classmethod
-    def handle_request(cls, modele_rkllm, model_name, messages, system="", stream=True, format_spec=None, options=None, img_encoder=None):
+    def handle_request(cls, modele_rkllm, model_name, messages, system="", stream=True, format_spec=None, options=None, tools=None, img_encoder=None):
         """Process a chat request with proper format handling"""
         simplified_model_name = get_simplified_model_name(model_name)
         
@@ -153,7 +158,7 @@ class ChatEndpointHandler(EndpointHandler):
                 img_emb = img_encoder.encode_image(images[0])
             else:
                 img_emb = None
-            tokenizer, prompt, prompt_tokens, prompt_token_count = cls.prepare_prompt(messages, system)
+            tokenizer, prompt, prompt_tokens, prompt_token_count = cls.prepare_prompt(messages, system, tools)
             
             if stream:
                 return cls.handle_streaming(modele_rkllm, simplified_model_name, prompt,
@@ -259,7 +264,8 @@ class ChatEndpointHandler(EndpointHandler):
         metrics["token_count"] = count
         
         format_data = None
-        if format_spec and complete_text:
+        tool_calls = get_tool_calls(complete_text)
+        if format_spec and complete_text and not tool_calls:
             success, parsed_data, error, cleaned_json = validate_format_response(complete_text, format_spec)
             if success and parsed_data:
                 format_type = (
@@ -272,6 +278,14 @@ class ChatEndpointHandler(EndpointHandler):
                     "cleaned_json": cleaned_json
                 }
         
+        if tool_calls:
+           format_data = {
+                   "format_type" : "json",
+                   "parsed": "",
+                   "cleaned_json": "",
+                   "tool_call": tool_calls
+           }
+
         response = cls.format_complete_response(model_name, complete_text, metrics, format_data)
         return jsonify(response), 200
 

@@ -3,6 +3,7 @@ import re
 import logging
 import requests
 from pathlib import Path
+import config
 
 # Configure logger
 logger = logging.getLogger("rkllama.model_utils")
@@ -10,6 +11,7 @@ logger = logging.getLogger("rkllama.model_utils")
 # Global dictionaries for model mappings
 SIMPLE_TO_FULL_MAP = {}  # Maps simplified names (e.g., "qwen2:3b") to full paths
 FULL_TO_SIMPLE_MAP = {}  # Maps full paths to simplified names
+TAG_TO_MODEL_MAP = {}  # Maps tag names from /api/tags to real model names
 
 # Mapping from RKLLM quantization types to Ollama-style formats
 QUANT_MAPPING = {
@@ -37,8 +39,8 @@ def get_huggingface_model_info(model_path):
         if not model_path or '/' not in model_path:
             return None
         
-        # Get DEBUG_MODE from environment for logging
-        debug_mode = os.environ.get("RKLLAMA_DEBUG", "0").lower() in ["1", "true", "yes", "on"]
+        # Get DEBUG_MODE from configuration
+        debug_mode = config.is_debug_mode()
         
         # Extract repo_id from HUGGINGFACE_PATH
         url = f"https://huggingface.co/api/models/{model_path}"
@@ -160,7 +162,7 @@ def get_huggingface_model_info(model_path):
                 logger.debug(f"Failed to get HF data: {response.status_code}")
             return None
     except Exception as e:
-        debug_mode = os.environ.get("RKLLAMA_DEBUG", "0").lower() in ["1", "true", "yes", "on"]
+        debug_mode = config.is_debug_mode()
         if debug_mode:
             logger.exception(f"Error fetching HF model info: {str(e)}")
         return None
@@ -359,11 +361,13 @@ def initialize_model_mappings():
     Initialize the model name mappings by scanning the models directory
     This should be called at server startup
     """
-    global SIMPLE_TO_FULL_MAP, FULL_TO_SIMPLE_MAP
+    global SIMPLE_TO_FULL_MAP, FULL_TO_SIMPLE_MAP, TAG_TO_MODEL_MAP
     SIMPLE_TO_FULL_MAP.clear()
     FULL_TO_SIMPLE_MAP.clear()
+    TAG_TO_MODEL_MAP.clear()
     
-    models_dir = os.path.expanduser("~/RKLLAMA/models")
+    # Use config module to get models directory path
+    models_dir = config.get_path("models")
     
     if not os.path.exists(models_dir):
         logger.warning(f"Models directory not found: {models_dir}")
@@ -377,7 +381,10 @@ def initialize_model_mappings():
         
         if os.path.isdir(full_path) and any(f.endswith('.rkllm') for f in os.listdir(full_path)):
             simple_name = get_simplified_model_name(model_dir)
-            
+
+            # Build tag alias mapping for Open WebUI
+            TAG_TO_MODEL_MAP[simple_name] = model_dir    
+    
             if simple_name not in model_names:
                 model_names[simple_name] = []
             model_names[simple_name].append(model_dir)
@@ -490,9 +497,14 @@ def find_model_by_name(name):
     # Try direct lookup first - maybe it's already the full path
     if name in SIMPLE_TO_FULL_MAP:
         return SIMPLE_TO_FULL_MAP[name]
+
+    # Try Open WebUI tag map
+    if name in TAG_TO_MODEL_MAP:
+        return TAG_TO_MODEL_MAP[name]
+
     
     # Check if it's a fully qualified path that exists directly
-    models_dir = os.path.expanduser("~/RKLLAMA/models")
+    models_dir = config.get_path("models")
     direct_path = os.path.join(models_dir, name)
     if os.path.isdir(direct_path):
         # It exists directly, make sure we use the collision-aware name
@@ -527,7 +539,7 @@ def ensure_model_loaded(model_name):
     full_model_name = find_model_by_name(model_name)
     if not full_model_name:
         # As a last resort, try direct path
-        models_dir = os.path.expanduser("~/RKLLAMA/models")
+        models_dir = config.get_path("models")
         if os.path.exists(os.path.join(models_dir, model_name)):
             return model_name
         
@@ -540,3 +552,67 @@ def ensure_model_loaded(model_name):
         return None
     
     return full_model_name
+
+import os
+import re
+from typing import Union
+
+def get_context_length(model_name: str, models_path: str = "models") -> Union[int, str]:
+
+    # Construct the full path to the model directory
+    model_dir = os.path.join(models_path, model_name)
+
+    # Check if the model directory exists
+    if not os.path.exists(os.path.join(model_dir, "Modelfile")):
+        return 2048
+
+    # Initialize default model family
+    family = "llama"
+
+    # Check for Modelfile to infer model family
+    modelfile_path = os.path.join(model_dir, "Modelfile")
+    if os.path.exists(modelfile_path):
+        try:
+            with open(modelfile_path, "r", encoding="utf-8") as file:
+                modelfile_content = file.read()
+                if re.search(r'(?i)qwen', modelfile_content):
+                    family = "qwen2"
+                elif re.search(r'(?i)mistral', modelfile_content):
+                    family = "mistral"
+                elif re.search(r'(?i)llama[-_]?3', modelfile_content):
+                    family = "llama3"
+                elif re.search(r'(?i)llama[-_]?2', modelfile_content):
+                    family = "llama2"
+                elif re.search(r'(?i)gemma', modelfile_content):
+                    family = "gemma"
+                elif re.search(r'(?i)phi', modelfile_content):
+                    family = "phi"
+        except (IOError, UnicodeDecodeError):
+            pass
+
+    # Fallback to model name analysis if Modelfile is absent or unreadable
+    if family == "llama":
+        if re.search(r'(?i)qwen', model_name):
+            family = "qwen2"
+        elif re.search(r'(?i)mistral', model_name):
+            family = "mistral"
+        elif re.search(r'(?i)llama[-_]?3', model_name):
+            family = "llama3"
+        elif re.search(r'(?i)llama[-_]?2', model_name):
+            family = "llama2"
+        elif re.search(r'(?i)gemma', model_name):
+            family = "gemma"
+        elif re.search(r'(?i)phi', model_name):
+            family = "phi"
+
+    context_lengths = {
+        "qwen2": 4096, #RKNN-LLM 1.1.4. From 1.2.0 up to 16K
+        "mistral": 4096,
+        "llama3": 4096,
+        "llama2": 4096,
+        "llama": 4096,
+        "gemma": 4096,
+        "phi": 2048
+    }
+
+    return context_lengths.get(family, 2048)

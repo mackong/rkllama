@@ -4,16 +4,57 @@ from flask import Flask, request, jsonify, Response
 import src.variables as variables
 import datetime
 import logging
-import os  # For accessing environment variables
+from config import is_debug_mode  # Import the config module
 from .format_utils import create_format_instruction, validate_format_response
 from src.model_utils import get_simplified_model_name  # Import at the top level
 
 logger = logging.getLogger("rkllama.process")
 
-# Import DEBUG_MODE setting from environment variables
-DEBUG_MODE = os.environ.get("RKLLAMA_DEBUG", "0").lower() in ["1", "true", "yes", "on"]
+# Get DEBUG_MODE from config instead of environment variable
+DEBUG_MODE = is_debug_mode()
 
-def Request(modele_rkllm, img_encoder=None, custom_request=None):
+import os
+from typing import Optional
+from transformers import AutoTokenizer
+from dotenv import load_dotenv
+
+def load_tokenizer(modelfile: str, model_id: str) -> Optional[AutoTokenizer]:
+
+    # Load environment variables from Modelfile
+    load_dotenv(modelfile, override=True)
+
+    # Retrieve custom tokenizer path
+    custom_tokenizer = os.getenv("TOKENIZER")
+    tokenizer = None
+
+    if custom_tokenizer:
+        # Check if the custom tokenizer path exists
+        if os.path.exists(custom_tokenizer):
+            try:
+                # Attempt to load the custom tokenizer
+                tokenizer = AutoTokenizer.from_pretrained(custom_tokenizer, trust_remote_code=True)
+                print(f"Loaded custom tokenizer from {custom_tokenizer}")
+            except Exception as e:
+                # Warn user and prepare to fallback
+                print(f"Warning: Could not load tokenizer from {custom_tokenizer}. \nError: {str(e)}. Falling back to default tokenizer.")
+        else:
+            # Warn user if path is invalid
+            print(f"Warning: Tokenizer path {custom_tokenizer} does not exist.\nFalling back to default tokenizer.")
+
+    # Fallback to default AutoTokenizer if necessary
+    if tokenizer is None:
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+            print(f"Loaded default tokenizer for model {model_id}")
+        except Exception as e:
+            print(f"Error: Failed to load default tokenizer for {model_id}.\nError: {str(e)}.")
+            return None
+
+    return tokenizer
+
+
+
+def Request(modele_rkllm, modelfile, img_encoder=None, custom_request=None):
     """
     Process a request to the language model
     
@@ -25,8 +66,8 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
         Flask response with generated text
     """
     try:
-        # Mettre le serveur en état de blocage.
-        isLocked = True
+        # Put the server in a locked state
+        is_locked = True
 
         # Use custom_request if provided, otherwise use Flask's request
         req = custom_request if custom_request is not None else request
@@ -46,10 +87,10 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
                 )
                 modele_rkllm.format_options = format_options
             
-            # Réinitialiser les variables globales.
+            # Reset global variables
             variables.global_status = -1
 
-            # Définir la structure de la réponse renvoyée.
+            # Define the structure of the returned response
             llmResponse = {
                 "id": "rkllm_chat",
                 "object": "rkllm_chat",
@@ -66,7 +107,7 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
             # Check if this is an Ollama-style request
             is_ollama_request = req.path.startswith('/api/')
             
-            # Récupérer l'historique du chat depuis la requête JSON
+            # Get chat history from JSON request
             messages = data["messages"]
 
             # Create format instructions
@@ -83,10 +124,12 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
                     if last_user_msg_idx >= 0:
                         original_content = messages[last_user_msg_idx]["content"]
                         messages[last_user_msg_idx]["content"] = original_content + format_instruction
-                        logger.debug(f"Added format instruction: {format_instruction}")
+                        if DEBUG_MODE:
+                            logger.debug(f"Added format instruction: {format_instruction}")
 
-            # Mise en place du tokenizer
-            tokenizer = AutoTokenizer.from_pretrained(variables.model_id, trust_remote_code=True)
+            # Setup tokenizer
+            tokenizer = load_tokenizer(modelfile, variables.model_id)
+
             supports_system_role = "raise_exception('System role not supported')" not in tokenizer.chat_template
 
             if variables.system and supports_system_role:
@@ -96,7 +139,7 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
 
             for i in range(1, len(prompt)):
                 if prompt[i]["role"] == prompt[i - 1]["role"]:
-                    raise ValueError("Les rôles doivent alterner entre 'user' et 'assistant'.")
+                    raise ValueError("Roles must alternate between 'user' and 'assistant'.")
 
             # TODO: multiple images?
             images = messages[-1].get("images", [])
@@ -118,7 +161,7 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
                     thread_modele = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
                     thread_modele.start()
 
-                    thread_modele_terminé = False
+                    thread_model_finished = False
                     count = 0
                     start = time.time()
                     prompt_eval_end_time = None
@@ -128,7 +171,7 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
                     complete_text = ""
                     tokens_since_last_response = 0  # Track tokens since last response sent
 
-                    while not thread_modele_terminé or not final_message_sent:
+                    while not thread_model_finished or not final_message_sent:
                         processed_tokens = False
                         
                         while len(variables.global_text) > 0:
@@ -231,10 +274,10 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
 
                         # Check if thread is done but we haven't sent final message yet
                         thread_modele.join(timeout=0.005)
-                        thread_modele_terminé = not thread_modele.is_alive()
+                        thread_model_finished = not thread_modele.is_alive()
                         
                         # If model is done and we haven't sent the final message yet, do it now
-                        if thread_modele_terminé and not final_message_sent:
+                        if thread_model_finished and not final_message_sent:
                             final_message_sent = True
                             
                             # Calculate final metrics
@@ -313,14 +356,14 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
                     print("Error starting thread:", e)
 
                 # Wait for model to finish
-                threadFinish = False
+                thread_model_finished = False
                 count = 0
                 start = time.time()
                 prompt_eval_end_time = None  # Will store time when first token is generated
                 complete_text = ""
                 first_token_generated = False
 
-                while not threadFinish:
+                while not thread_model_finished:
                     while len(variables.global_text) > 0:
                         count += 1
                         token = variables.global_text.pop(0)
@@ -334,7 +377,7 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
                         time.sleep(0.005)
 
                         thread_modele.join(timeout=0.005)
-                    threadFinish = not thread_modele.is_alive()
+                    thread_model_finished = not thread_modele.is_alive()
 
                 end_time = time.time()
                 total_duration = end_time - start
@@ -405,9 +448,9 @@ def Request(modele_rkllm, img_encoder=None, custom_request=None):
                     return jsonify(llmResponse), 200
                     
         else:
-            return jsonify({'status': 'error', 'message': 'Données JSON invalides !'}), 400
+            return jsonify({'status': 'error', 'message': 'Invalid JSON data!'}), 400
     finally:
         # No need to release the lock here as it should be handled by the calling function
         if custom_request is None:
             variables.verrou.release()
-        est_bloqué = False
+        is_locked = False
