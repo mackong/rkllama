@@ -1,3 +1,4 @@
+import multiprocessing
 import ctypes
 from .classes import *
 from .callback import *
@@ -40,6 +41,9 @@ class RKLLM(object):
         rkllm_param.img_content = "<|image_pad|>".encode('utf-8')
 
         rkllm_param.extend_param.base_domain_id = 0
+        rkllm_param.extend_param.embed_flash = 1
+        rkllm_param.extend_param.enabled_cpus_num = multiprocessing.cpu_count()
+        rkllm_param.extend_param.enabled_cpus_mask = (1<<(rkllm_param.extend_param.enabled_cpus_num+1))-1
         
         self.handle = RKLLM_Handle_t()
 
@@ -107,6 +111,7 @@ class RKLLM(object):
             # TODO: make these configuable?
             # See bin/img_encoder.cpp
             rkllm_input.input_data.multimodal_input.n_image_tokens = 196
+            rkllm_input.input_data.multimodal_input.n_image = 1
             rkllm_input.input_data.multimodal_input.image_height = 392
             rkllm_input.input_data.multimodal_input.image_with = 392
 

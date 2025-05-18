@@ -121,7 +121,9 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
     modele_rkllm = RKLLM(os.path.join(model_dir, from_value), model_dir, temperature=float(temperature), context_length=context_length)
 
     if image_emb_model_path is not None:
-        img_encoder = ImageEncoder(image_emb_model_path)
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        img_encoder_bin = os.path.join(current_dir, "bin/img_encoder")
+        img_encoder = ImageEncoder(image_emb_model_path, img_encoder_bin)
     else:
         img_encoder = None
 
