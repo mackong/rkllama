@@ -35,7 +35,7 @@ class ImageEncoder:
             f.write(base64.b64decode(b64_image))
 
         try:
-            request = f"{image_path}|{image_emb_output}\n".encode('utf-8')
+            request = f"{image_path}|{image_emb_output}\n".encode("utf-8")
             self.process.stdin.write(request)
             self.process.stdin.flush()
 
@@ -44,16 +44,17 @@ class ImageEncoder:
                 if not line:
                     return None
 
-                if line.startswith(b"Success:"):
+                line = line.decode("utf-8")
+                if line.startswith("Success:"):
                     print(line)
                     with open(image_emb_output, "rb") as f:
                         img_vec = np.fromfile(f, dtype=np.float32)
 
-                    if not img_vec.flags['C_CONTIGUOUS']:
+                    if not img_vec.flags["C_CONTIGUOUS"]:
                         img_vec = np.ascontiguousarray(img_vec)
 
                     return img_vec
-                elif line.startswith(b"Error:"):
+                elif line.startswith("Error:"):
                     return None
         except Exception as e:
             print(f"Encoding failed: {str(e)}")
