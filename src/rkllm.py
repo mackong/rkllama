@@ -1,3 +1,4 @@
+import multiprocessing
 import ctypes
 from .classes import *
 from .callback import *
@@ -35,11 +36,14 @@ class RKLLM(object):
 
         rkllm_param.is_async = False
 
-        rkllm_param.img_start = "".encode('utf-8')
-        rkllm_param.img_end = "".encode('utf-8')
-        rkllm_param.img_content = "".encode('utf-8')
+        rkllm_param.img_start = "<|vision_start|>".encode('utf-8')
+        rkllm_param.img_end = "<|vision_end|>".encode('utf-8')
+        rkllm_param.img_content = "<|image_pad|>".encode('utf-8')
 
         rkllm_param.extend_param.base_domain_id = 0
+        rkllm_param.extend_param.embed_flash = 1
+        rkllm_param.extend_param.enabled_cpus_num = multiprocessing.cpu_count()
+        rkllm_param.extend_param.enabled_cpus_mask = (1<<(rkllm_param.extend_param.enabled_cpus_num+1))-1
         
         self.handle = RKLLM_Handle_t()
 
@@ -85,7 +89,7 @@ class RKLLM(object):
     def tokens_to_ctypes_array(self, tokens, ctype):
         return (ctype * len(tokens))(*tokens)
 
-    def run(self, prompt_tokens):
+    def run(self, prompt, image_embed=None):
         rkllm_lora_params = None
         if self.lora_model_name:
             rkllm_lora_params = RKLLMLoraParam()
@@ -97,16 +101,19 @@ class RKLLM(object):
         rkllm_infer_params.lora_params = ctypes.byref(rkllm_lora_params) if rkllm_lora_params else None
 
         rkllm_input = RKLLMInput()
-        rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_TOKEN
-
-        if prompt_tokens[-1] != 2:  
-            prompt_tokens.append(2)
-
-        token_array = (ctypes.c_int * len(prompt_tokens))(*prompt_tokens)
-
-        rkllm_input.input_data.token_input.input_ids = token_array
-        rkllm_input.input_data.token_input.n_tokens = ctypes.c_ulong(len(prompt_tokens))
-
+        if image_embed is None:
+            rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_PROMPT
+            rkllm_input.input_data.prompt_input = ctypes.c_char_p(prompt.encode("utf-8"))
+        else:
+            rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_MULTIMODAL
+            rkllm_input.input_data.multimodal_input.prompt = ctypes.c_char_p(prompt.encode("utf-8"))
+            rkllm_input.input_data.multimodal_input.image_embed = image_embed.ctypes.data_as(ctypes.POINTER(ctypes.c_float))
+            # TODO: make these configuable?
+            # See bin/img_encoder.cpp
+            rkllm_input.input_data.multimodal_input.n_image_tokens = 196
+            rkllm_input.input_data.multimodal_input.n_image = 1
+            rkllm_input.input_data.multimodal_input.image_height = 392
+            rkllm_input.input_data.multimodal_input.image_with = 392
 
         self.rkllm_run(self.handle, ctypes.byref(rkllm_input), ctypes.byref(rkllm_infer_params), None)
 

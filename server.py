@@ -10,6 +10,7 @@ from transformers import AutoTokenizer
 # Local file
 from src.classes import *
 from src.rkllm import *
+from src.img_encoder import ImageEncoder
 from src.process import Request
 import src.variables as variables
 from src.server_utils import process_ollama_chat_request, process_ollama_generate_request
@@ -57,6 +58,7 @@ def print_color(message, color):
 
 current_model = None  # Global variable for storing the loaded model
 modele_rkllm = None  # Model instance
+img_encoder = None
 
 
 def create_modelfile(huggingface_path, From, system="", temperature=1.0):
@@ -99,10 +101,14 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
     load_dotenv(os.path.join(model_dir, "Modelfile"), override=True)
     
     from_value = os.getenv("FROM")
+    image_emb_value = os.getenv("IMAGE_EMB_PATH")
+    image_emb_model_path = os.path.join(model_dir, image_emb_value) if image_emb_value else None
     huggingface_path = os.getenv("HUGGINGFACE_PATH")
 
     # View config Vars
-    print_color(f"FROM: {from_value}\nHuggingFace Path: {huggingface_path}", "green")
+    print_color(f"FROM: {from_value}", "green")
+    print_color(f"IMAGE_EMB_PATH: {image_emb_value}", "green")
+    print_color(f"HuggingFace Path: {huggingface_path}", "green")
     
     if not from_value or not huggingface_path:
         return None, "FROM or HUGGINGFACE_PATH not defined in Modelfile."
@@ -113,13 +119,21 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
 
     
     modele_rkllm = RKLLM(os.path.join(model_dir, from_value), model_dir, temperature=float(temperature), context_length=context_length)
-    return modele_rkllm, None
+
+    if image_emb_model_path is not None:
+        img_encoder = ImageEncoder(image_emb_model_path)
+    else:
+        img_encoder = None
+
+    return modele_rkllm, img_encoder, None
 
 def unload_model():
-    global modele_rkllm
+    global modele_rkllm, img_encoder
     if modele_rkllm:
         modele_rkllm.release()
         modele_rkllm = None
+    if img_encoder:
+        img_encoder = None
 
 app = Flask(__name__)
 # Enable CORS for all routes
@@ -252,7 +266,7 @@ def pull_model():
 # Route for loading a model into the NPU
 @app.route('/load_model', methods=['POST'])
 def load_model_route():
-    global current_model, modele_rkllm
+    global current_model, modele_rkllm, img_encoder
 
     # Check if a model is currently loaded
     if modele_rkllm:
@@ -268,9 +282,9 @@ def load_model_route():
 
     # Check if other params like "from" or "huggingface_path" for create modelfile
     if "from" in data or "huggingface_path" in data:
-        modele_rkllm, error = load_model(model_name, From=data["from"], huggingface_path=data["huggingface_path"])
+        modele_rkllm, img_encoder, error = load_model(model_name, From=data["from"], huggingface_path=data["huggingface_path"])
     else:
-        modele_rkllm, error = load_model(model_name)
+        modele_rkllm, img_encoder, error = load_model(model_name)
 
     if error:
         return jsonify({"error": error}), 400
@@ -303,7 +317,7 @@ def get_current_model():
 # Route to make a request to the model
 @app.route('/generate', methods=['POST'])
 def recevoir_message():
-    global modele_rkllm
+    global modele_rkllm, img_encoder
 
     if not modele_rkllm:
         return jsonify({"error": "No models are currently loaded."}), 400
@@ -312,7 +326,7 @@ def recevoir_message():
     modelfile = os.path.join(modele_rkllm.model_dir, "Modelfile")
 
     variables.verrou.acquire()
-    return Request(modele_rkllm, modelfile)
+    return Request(modele_rkllm, modelfile, img_encoder)
 
 # Ollama API compatibility routes
 
@@ -817,7 +831,7 @@ def delete_model_ollama():
 
 @app.route('/api/generate', methods=['POST'])
 def generate_ollama():
-    global modele_rkllm, current_model
+    global modele_rkllm, img_encoder, current_model
     
     lock_acquired = False  # Track lock status
 
@@ -827,6 +841,7 @@ def generate_ollama():
         prompt = data.get('prompt')
         system = data.get('system', '')
         stream = data.get('stream', True)
+        images = data.get('images', [])
         
         # Support format options for structured JSON output
         format_spec = data.get('format')
@@ -855,10 +870,11 @@ def generate_ollama():
         if current_model != model_name:
             if current_model:
                 unload_model()
-            modele_instance, error = load_model(model_name)
+            modele_instance, img_encoder_instance, error = load_model(model_name)
             if error:
                 return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
             modele_rkllm = modele_instance
+            img_encoder = img_encoder_instance
             current_model = model_name
 
         # Acquire lock before processing
@@ -874,7 +890,9 @@ def generate_ollama():
             system=system,
             stream=stream,
             format_spec=format_spec,
-            options=options
+            options=options,
+            img_encoder=img_encoder,
+            images=images,
         )
     except Exception as e:
         if DEBUG_MODE:
@@ -888,7 +906,7 @@ def generate_ollama():
 # Also update the chat endpoint for consistency
 @app.route('/api/chat', methods=['POST'])
 def chat_ollama():
-    global modele_rkllm, current_model
+    global modele_rkllm, img_encoder, current_model
     
     lock_acquired = False  # Track lock status
 
@@ -955,12 +973,13 @@ def chat_ollama():
             
             if DEBUG_MODE:
                 logger.debug(f"Loading model: {model_name}")
-            modele_instance, error = load_model(model_name)
+            modele_instance, img_encoder_instance, error = load_model(model_name)
             if error:
                 if DEBUG_MODE:
                     logger.error(f"Failed to load model {model_name}: {error}")
                 return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
             modele_rkllm = modele_instance
+            img_encoder = img_encoder_instance
             current_model = model_name
             if DEBUG_MODE:
                 logger.debug(f"Model {model_name} loaded successfully")
@@ -1011,7 +1030,8 @@ def chat_ollama():
             stream=stream,
             format_spec=format_spec,
             options=options,
-            tools=tools
+            tools=tools,
+            img_encoder=img_encoder,
         )
     
     except Exception as e:
