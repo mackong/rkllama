@@ -156,6 +156,7 @@ class ChatEndpointHandler(EndpointHandler):
                 # Must have "<image>" token added.
                 messages[-1]["content"] = "<image>" + messages[-1]["content"]
                 img_emb = img_encoder.encode_image(images[0])
+                messages = messages[-1:]  # Clear history
             else:
                 img_emb = None
             tokenizer, prompt, prompt_tokens, prompt_token_count = cls.prepare_prompt(messages, system, tools)
