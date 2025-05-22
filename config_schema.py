@@ -252,6 +252,7 @@ def create_rkllama_schema() -> ConfigSchema:
     paths.path("data", "data", "Path to data files")
     paths.path("src", "src", "Path to source files")
     paths.path("lib", "lib", "Path to library files")
+    paths.path("bin", "bin", "Path to executable files")
     paths.path("temp", "temp", "Path to temporary files")
     
     # Model section

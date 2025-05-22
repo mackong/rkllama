@@ -5,19 +5,26 @@ from typing import Optional
 
 import numpy as np
 
+import config
+
 
 class ImageEncoder:
-    def __init__(self, model_path: str, executable_path: str = "./bin/img_encoder"):
+    def __init__(self, model_path: str):
         self.model_path = os.path.abspath(model_path)
-        self.executable_path = os.path.abspath(executable_path)
+
+        exe_path = os.path.join(config.get_path("bin"), "img_encoder")
+
+        env = os.environ.copy()
+        env["LD_LIBRARY_PATH"] = config.get_path("lib")
 
         self.process = subprocess.Popen(
-            [self.executable_path, self.model_path],
+            [exe_path, self.model_path],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,  # Unbuffered
-            universal_newlines=False
+            universal_newlines=False,
+            env=env,
         )
 
     def encode_image(self, b64_image: str) -> Optional[np.ndarray]:
