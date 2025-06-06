@@ -154,7 +154,7 @@ class ChatEndpointHandler(EndpointHandler):
             images = messages[-1].get("images", [])
             if images and img_encoder:
                 # Must have "<image>" token added.
-                messages[-1]["content"] = "<image>" + messages[-1]["content"]
+                messages[-1]["content"] = "<image>" + messages[-1].get("content", "")
                 img_emb = img_encoder.encode_image(images[0])
                 messages = messages[-1:]  # Clear history
             else:
@@ -345,7 +345,7 @@ class GenerateEndpointHandler(EndpointHandler):
         messages = [{"role": "user", "content": prompt}]
         # TODO: multiple images?
         if images and img_encoder:
-            messages[-1]["content"] = "<image>" + messages[-1]["content"]
+            messages[-1]["content"] = "<image>" + messages[-1].get("content", "")
             img_emb = img_encoder.encode_image(images[0])
         else:
             img_emb = None

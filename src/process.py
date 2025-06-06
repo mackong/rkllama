@@ -145,7 +145,7 @@ def Request(modele_rkllm, modelfile, img_encoder=None, custom_request=None):
             images = messages[-1].get("images", [])
             if images and img_encoder:
                 # Must have "<image"> token added.
-                prompt[-1]["content"] = "<image>" + prompt[-1]["content"]
+                prompt[-1]["content"] = "<image>" + prompt[-1].get("content", "")
                 img_emb = img_encoder.encode_image(images[0])
             else:
                 img_emb = None
