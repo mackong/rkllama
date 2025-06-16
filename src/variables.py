@@ -19,3 +19,5 @@ stream_stats = {
     "failed_responses": 0,
     "incomplete_streams": 0  # Streams that didn't receive done=true
 }
+
+default_text_content = "hi"

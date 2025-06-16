@@ -148,6 +148,9 @@ def Request(modele_rkllm, modelfile, img_encoder=None, custom_request=None):
                 prompt[-1]["content"] = "<image>" + prompt[-1].get("content", "")
                 img_emb = img_encoder.encode_image(images[0])
             else:
+                for m in prompt:
+                    if not m.get("content", ""):
+                        m["content"] = variables.default_text_content
                 img_emb = None
             # Mise en place du chat Template
             prompt_tokens = tokenizer.apply_chat_template(prompt, tokenize=True, add_generation_prompt=True)

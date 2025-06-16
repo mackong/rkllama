@@ -41,6 +41,10 @@ class EndpointHandler:
     @staticmethod
     def prepare_prompt(messages, system="", tools=None):
         """Prepare prompt with proper system handling"""
+        for m in messages:
+            if not m.get("content", ""):
+                m["content"] = variables.default_text_content
+
         tokenizer = AutoTokenizer.from_pretrained(variables.model_id, trust_remote_code=True)
         supports_system_role = "raise_exception('System role not supported')" not in tokenizer.chat_template
         
