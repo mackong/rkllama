@@ -7,6 +7,7 @@ import os
 import re  # Add import for regex used in JSON extraction
 from transformers import AutoTokenizer
 from flask import jsonify, Response
+import numpy as np
 import src.variables as variables
 from src.model_utils import get_simplified_model_name
 from .format_utils import create_format_instruction, validate_format_response, get_tool_calls
@@ -178,7 +179,9 @@ class ChatEndpointHandler(EndpointHandler):
     def handle_streaming(cls, modele_rkllm, model_name, prompt, prompt_token_count, format_spec, img_emb=None):
         """Handle streaming chat response"""
         def generate():
-            thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
+            run_args = (prompt, )
+            run_kwargs = {"img_emb": img_emb}
+            thread_model = threading.Thread(target=modele_rkllm.run, args=run_args, kwargs=run_kwargs)
             thread_model.start()
             
             count = 0
@@ -246,7 +249,9 @@ class ChatEndpointHandler(EndpointHandler):
         start_time = time.time()
         prompt_eval_time = None
         
-        thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
+        run_args = (prompt, )
+        run_kwargs = {"img_emb": img_emb}
+        thread_model = threading.Thread(target=modele_rkllm.run, args=run_args, kwargs=run_kwargs)
         thread_model.start()
         
         count = 0
@@ -389,7 +394,9 @@ class GenerateEndpointHandler(EndpointHandler):
     def handle_streaming(cls, modele_rkllm, model_name, prompt, prompt_token_count, format_spec, img_emb=None):
         """Handle streaming generate response"""
         def generate():
-            thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
+            run_args = (prompt, )
+            run_kwargs = {"img_emb": img_emb}
+            thread_model = threading.Thread(target=modele_rkllm.run, args=run_args, kwargs=run_kwargs)
             thread_model.start()
             
             count = 0
@@ -457,7 +464,9 @@ class GenerateEndpointHandler(EndpointHandler):
         start_time = time.time()
         prompt_eval_time = None
         
-        thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
+        run_args = (prompt, )
+        run_kwargs = {"img_emb": img_emb}
+        thread_model = threading.Thread(target=modele_rkllm.run, args=run_args, kwargs=run_kwargs)
         thread_model.start()
         
         count = 0
@@ -556,6 +565,83 @@ class GenerateEndpointHandler(EndpointHandler):
         if DEBUG_MODE and format_data:
             logger.debug(f"Created formatted response with JSON content")
             
+        return jsonify(response), 200
+
+
+class EmbedEndpointHandler(EndpointHandler):
+    """Handler for /api/embeddings endpoint requests"""
+
+    @staticmethod
+    def format_streaming_chunk(model_name, token, is_final=False, metrics=None, format_data=None):
+        """Format a streaming chunk for generate endpoint"""
+        chunk = {
+            "model": model_name,
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "response": token if not is_final else "",
+            "done": is_final
+        }
+
+        if is_final:
+            chunk["done_reason"] = "stop"
+            if metrics:
+                chunk.update({
+                    "total_duration": metrics["total"],
+                    "load_duration": metrics["load"],
+                    "prompt_eval_count": metrics.get("prompt_tokens", 0),
+                    "prompt_eval_duration": metrics["prompt_eval"],
+                    "eval_count": metrics.get("token_count", 0),
+                    "eval_duration": metrics["eval"]
+                })
+
+        return chunk
+
+    @classmethod
+    def handle_request(cls, modele_rkllm, model_name, prompt, options=None):
+        """Process a embedding request with proper format handling"""
+        simplified_model_name = get_simplified_model_name(model_name)
+
+        if DEBUG_MODE:
+            logger.debug(f"EmbedEndpointHandler: processing request for {simplified_model_name}")
+
+        try:
+            variables.global_status = -1
+            variables.global_embed = None
+            return cls.handle_complete(modele_rkllm, simplified_model_name, prompt)
+        finally:
+            pass
+
+    @classmethod
+    def handle_complete(cls, modele_rkllm, model_name, prompt):
+        """Handle complete generate response"""
+        start_time = time.time()
+
+        thread_model = threading.Thread(target=modele_rkllm.run, args=(prompt, ))
+        thread_model.start()
+
+        while thread_model.is_alive():
+            thread_model.join(timeout=0.005)
+
+        prompt_eval_time = time.time()
+
+        metrics = cls.calculate_durations(start_time, prompt_eval_time)
+
+        global_embed = variables.global_embed
+        if global_embed:
+            embedding = global_embed.embedding
+            normalized_embedding = embedding / np.linalg.norm(embedding)
+            normalized_embedding = normalized_embedding.tolist()
+            metrics["prompt_tokens"] = global_embed.num_tokens
+        else:
+            normalized_embedding = None
+            metrics["prompt_tokens"] = 0
+
+        response = {
+            "embedding": normalized_embedding
+        }
+
+        if DEBUG_MODE:
+            logger.debug(f"Created formatted response with JSON content")
+
         return jsonify(response), 200
 
 

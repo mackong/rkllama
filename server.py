@@ -101,14 +101,16 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
     load_dotenv(os.path.join(model_dir, "Modelfile"), override=True)
     
     from_value = os.getenv("FROM")
-    image_emb_value = os.getenv("IMAGE_EMB_PATH")
+    image_emb_value = os.environ.pop("IMAGE_EMB_PATH", None)
     image_emb_model_path = os.path.join(model_dir, image_emb_value) if image_emb_value else None
     huggingface_path = os.getenv("HUGGINGFACE_PATH")
+    model_type = RKModelType(os.environ.pop("MODEL_TYPE", RKModelType.LANGUAGE))
 
     # View config Vars
     print_color(f"FROM: {from_value}", "green")
     print_color(f"IMAGE_EMB_PATH: {image_emb_value}", "green")
     print_color(f"HuggingFace Path: {huggingface_path}", "green")
+    print_color(f"MODEL_TYPE: {model_type}", "green")
     
     if not from_value or not huggingface_path:
         return None, "FROM or HUGGINGFACE_PATH not defined in Modelfile."
@@ -117,8 +119,10 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
     variables.model_id = huggingface_path
     context_length = get_context_length(model_name, config.get_path("models"))
 
-    
-    modele_rkllm = RKLLM(os.path.join(model_dir, from_value), model_dir, temperature=float(temperature), context_length=context_length)
+    modele_rkllm = RKModelFactory.create_model(
+        model_type, os.path.join(model_dir, from_value), model_dir,
+        float(temperature), context_length
+    )
 
     if image_emb_model_path is not None:
         img_encoder = ImageEncoder(image_emb_model_path)
@@ -133,6 +137,7 @@ def unload_model():
         modele_rkllm.release()
         modele_rkllm = None
     if img_encoder:
+        img_encoder.release()
         img_encoder = None
 
 app = Flask(__name__)
@@ -873,6 +878,10 @@ def generate_ollama():
             modele_instance, img_encoder_instance, error = load_model(model_name)
             if error:
                 return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
+            if modele_instance.get_model_type() != RKModelType.LANGUAGE:
+                if DEBUG_MODE:
+                    logger.error(f"The model {model_name} to load is not a language model")
+                return jsonify({"error": f"The model '{model_name}' to load is not a language model"}), 500
             modele_rkllm = modele_instance
             img_encoder = img_encoder_instance
             current_model = model_name
@@ -978,6 +987,10 @@ def chat_ollama():
                 if DEBUG_MODE:
                     logger.error(f"Failed to load model {model_name}: {error}")
                 return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
+            if modele_instance.get_model_type() != RKModelType.LANGUAGE:
+                if DEBUG_MODE:
+                    logger.error(f"The model {model_name} to load is not a language model")
+                return jsonify({"error": f"The model '{model_name}' to load is not a language model"}), 500
             modele_rkllm = modele_instance
             img_encoder = img_encoder_instance
             current_model = model_name
@@ -1069,10 +1082,77 @@ if DEBUG_MODE:
 
 @app.route('/api/embeddings', methods=['POST'])
 def embeddings_ollama():
-    # This is a placeholder as embeddings aren't implemented in RKLLAMA
-    return jsonify({
-        "error": "Embeddings not supported in RKLLAMA"
-    }), 501
+    global modele_rkllm, current_model
+
+    lock_acquired = False  # Track lock status
+
+    try:
+        data = request.get_json(force=True)
+        model_name = data.get('model')
+        prompt = data.get('prompt', '')
+
+        options = data.get('options', {})
+
+        if DEBUG_MODE:
+            logger.debug(f"API embedding request: model={model_name}")
+
+        # Improved model resolution
+        full_model_name = find_model_by_name(model_name)
+        if not full_model_name:
+            if DEBUG_MODE:
+                logger.error(f"Model '{model_name}' not found")
+            return jsonify({"error": f"Model '{model_name}' not found"}), 404
+
+        # Use the full model name for loading
+        model_name = full_model_name
+
+        # Load model if needed
+        if current_model != model_name:
+            if current_model:
+                if DEBUG_MODE:
+                    logger.debug(f"Unloading current model: {current_model}")
+                unload_model()
+
+            if DEBUG_MODE:
+                logger.debug(f"Loading model: {model_name}")
+            modele_instance, _, error = load_model(model_name)
+            if error:
+                if DEBUG_MODE:
+                    logger.error(f"Failed to load model {model_name}: {error}")
+                return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
+            if modele_instance.get_model_type() != RKModelType.EMBED:
+                if DEBUG_MODE:
+                    logger.error(f"The model {model_name} to load is not an embedding model")
+                return jsonify({"error": f"The model '{model_name}' to load is not an embedding model"}), 500
+
+            modele_rkllm = modele_instance
+            current_model = model_name
+            if DEBUG_MODE:
+                logger.debug(f"Model {model_name} loaded successfully")
+
+        # Acquire lock before processing the request
+        variables.verrou.acquire()
+        lock_acquired = True  # Mark lock as acquired
+
+        # Process the request - this won't release the lock
+        from src.server_utils import EmbedEndpointHandler
+        return EmbedEndpointHandler.handle_request(
+            modele_rkllm=modele_rkllm,
+            model_name=model_name,
+            prompt=prompt,
+            options=options,
+        )
+
+    except Exception as e:
+        logger.exception("Error in chat_ollama")
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        # Only release if we acquired it
+        if lock_acquired and variables.verrou.locked():
+            if DEBUG_MODE:
+                logger.debug("Releasing lock in chat_ollama")
+            variables.verrou.release()
 
 # Version endpoint for Ollama API compatibility
 @app.route('/api/version', methods=['GET'])

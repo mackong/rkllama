@@ -60,13 +60,12 @@ class ImageEncoder:
             print(f"Encoding failed: {str(e)}")
             return None
 
-    def __del__(self):
+    def release(self):
         """Clean up the subprocess."""
         if hasattr(self, 'process'):
             self.process.stdin.close()
             try:
-                self.process.wait(timeout=1)
-            except Exception:
-                self.process.terminate()
+                self.process.kill()
+                self.process.wait(1)
             finally:
                 print("Image Encoder service stopped")

@@ -1,18 +1,19 @@
-import ctypes, sys
+import ctypes
+import sys
 import time
+import numpy as np
+import src.variables as variables
 from .classes import *
-from .variables import *
 
-# Definir la fonction de rappel
+
 def callback_impl(resultat, donnees_utilisateur, etat):
-    global split_byte_data
-
+    """Definir la fonction de rappel."""
     if etat == LLMCallState.RKLLM_RUN_FINISH:
-        global_status = etat
+        variables.global_status = etat
         print("\n")
         sys.stdout.flush()
     elif etat == LLMCallState.RKLLM_RUN_ERROR:
-        global_status = etat
+        variables.global_status = etat
         print("erreur d'execution")
         sys.stdout.flush()
     elif etat == LLMCallState.RKLLM_RUN_GET_LAST_HIDDEN_LAYER:
@@ -26,7 +27,7 @@ def callback_impl(resultat, donnees_utilisateur, etat):
             taille_donnees = resultat.last_hidden_layer.embd_size * resultat.last_hidden_layer.num_tokens * ctypes.sizeof(ctypes.c_float)
             print(f"taille_donnees : {taille_donnees}")
             
-            global_text.append(f"taille_donnees : {taille_donnees}\n")
+            variables.global_text.append(f"taille_donnees : {taille_donnees}\n")
             chemin_sortie = os.getcwd() + "/last_hidden_layer.bin"
 
             with open(chemin_sortie, "wb") as fichier_sortie:
@@ -35,17 +36,17 @@ def callback_impl(resultat, donnees_utilisateur, etat):
                 tableau_float = type_tableau_float.from_address(ctypes.addressof(donnees.contents))
                 fichier_sortie.write(bytearray(tableau_float))
                 print(f"Donnees sauvegardees dans {chemin_sortie} avec succes !")
-                global_text.append(f"Donnees sauvegardees dans {chemin_sortie} avec succes !")
+                variables.global_text.append(f"Donnees sauvegardees dans {chemin_sortie} avec succes !")
         else:
             print("Donnees de la couche cachee invalides.")
-            global_text.append("Donnees de la couche cachee invalides.")
+            variables.global_text.append("Donnees de la couche cachee invalides.")
         
-        global_status = etat
+        variables.global_status = etat
         time.sleep(0.05)  # Attente de 0,05 seconde pour attendre le resultat de la sortie
         sys.stdout.flush()
     else:
         # Sauvegarder le texte du token de sortie et l'etat d'execution de RKLLM
-        global_status = etat
+        variables.global_status = etat
         # Check if resultat or resultat.contents or resultat.contents.text is None
         try:
             # Add defensive checks to prevent None concatenation
@@ -60,26 +61,50 @@ def callback_impl(resultat, donnees_utilisateur, etat):
                         
                 # Now safely concatenate
                 try:
-                    decoded_text = (split_byte_data + text_bytes).decode('utf-8')
-                    global_text.append(decoded_text)
+                    decoded_text = (variables.split_byte_data + text_bytes).decode('utf-8')
+                    variables.global_text.append(decoded_text)
                     print(decoded_text, end='')
-                    split_byte_data = bytes(b"")
+                    variables.split_byte_data = bytes(b"")
                 except UnicodeDecodeError:
                     # Handle incomplete UTF-8 sequences
-                    split_byte_data += text_bytes
+                    variables.split_byte_data += text_bytes
             else:
                 # Handle case where text is None
-                if split_byte_data:
+                if variables.split_byte_data:
                     try:
                         # Try to decode any accumulated bytes
-                        decoded_text = split_byte_data.decode('utf-8')
-                        global_text.append(decoded_text)
+                        decoded_text = variables.split_byte_data.decode('utf-8')
+                        variables.global_text.append(decoded_text)
                         print(decoded_text, end='')
-                        split_byte_data = bytes(b"")
+                        variables.split_byte_data = bytes(b"")
                     except UnicodeDecodeError:
                         # Still incomplete, keep for next time
                         pass
         except Exception as e:
             print(f"\nError processing callback: {str(e)}", end='')
             
+        sys.stdout.flush()
+
+
+def embed_callback_impl(result_ptr, userdata_ptr, state):
+    if state == LLMCallState.RKLLM_RUN_NORMAL:
+        variables.global_status = state
+        result = result_ptr.contents
+        last_hidden_layer = result.last_hidden_layer
+        if last_hidden_layer.hidden_states and last_hidden_layer.embd_size > 0:
+            embd_size = last_hidden_layer.embd_size
+            num_tokens = last_hidden_layer.num_tokens
+            if num_tokens > 0:
+                last_token_embedding = np.array([
+                    last_hidden_layer.hidden_states[(num_tokens - 1) * embd_size + i]
+                    for i in range(embd_size)
+                ])
+                variables.global_embed = variables.EmbedResult(
+                    embedding=last_token_embedding,
+                    embd_size=embd_size,
+                    num_tokens=num_tokens
+                )
+    elif state == LLMCallState.RKLLM_RUN_ERROR:
+        variables.global_status = state
+        print("erreur d'execution")
         sys.stdout.flush()

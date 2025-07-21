@@ -1,9 +1,22 @@
 import threading
+from dataclasses import dataclass
+
+import numpy as np
+
 from config import is_debug_mode
+
+
+@dataclass
+class EmbedResult:
+    embedding: np.ndarray
+    embd_size: int
+    num_tokens: int
+
 
 isLocked = False
 global_status = -1
 global_text = []
+global_embed: EmbedResult = None
 split_byte_data = bytes(b"")
 
 verrou = threading.Lock()

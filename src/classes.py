@@ -121,7 +121,8 @@ class RKLLMInferParam(ctypes.Structure):
     _fields_ = [
         ("mode", RKLLMInferMode),
         ("lora_params", ctypes.POINTER(RKLLMLoraParam)),
-        ("prompt_cache_params", ctypes.POINTER(RKLLMPromptCacheParam))
+        ("prompt_cache_params", ctypes.POINTER(RKLLMPromptCacheParam)),
+        ("keep_history", ctypes.c_int)
     ]
 
 class RKLLMResultLastHiddenLayer(ctypes.Structure):
