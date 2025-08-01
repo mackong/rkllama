@@ -571,30 +571,6 @@ class GenerateEndpointHandler(EndpointHandler):
 class EmbedEndpointHandler(EndpointHandler):
     """Handler for /api/embeddings endpoint requests"""
 
-    @staticmethod
-    def format_streaming_chunk(model_name, token, is_final=False, metrics=None, format_data=None):
-        """Format a streaming chunk for generate endpoint"""
-        chunk = {
-            "model": model_name,
-            "created_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
-            "response": token if not is_final else "",
-            "done": is_final
-        }
-
-        if is_final:
-            chunk["done_reason"] = "stop"
-            if metrics:
-                chunk.update({
-                    "total_duration": metrics["total"],
-                    "load_duration": metrics["load"],
-                    "prompt_eval_count": metrics.get("prompt_tokens", 0),
-                    "prompt_eval_duration": metrics["prompt_eval"],
-                    "eval_count": metrics.get("token_count", 0),
-                    "eval_duration": metrics["eval"]
-                })
-
-        return chunk
-
     @classmethod
     def handle_request(cls, modele_rkllm, model_name, prompt, options=None):
         """Process a embedding request with proper format handling"""
@@ -639,10 +615,141 @@ class EmbedEndpointHandler(EndpointHandler):
             "embedding": normalized_embedding
         }
 
+        return jsonify(response), 200
+
+
+class RerankEndpointHandler(EndpointHandler):
+    """Handler for /api/rerank endpoint requests"""
+
+    @classmethod
+    def handle_request(cls, modele_rkllm, model_name, prompt, documents, instruction='', options=None):
+        """Process a rerank request with proper format handling"""
+        simplified_model_name = get_simplified_model_name(model_name)
+
         if DEBUG_MODE:
-            logger.debug(f"Created formatted response with JSON content")
+            logger.debug(f"RerankEndpointHandler: processing request for {simplified_model_name}")
+
+        try:
+            variables.global_status = -1
+            variables.global_rerank_logits = None
+            return cls.handle_complete(modele_rkllm, simplified_model_name, prompt, documents, instruction)
+        finally:
+            pass
+
+    @classmethod
+    def handle_complete(cls, modele_rkllm, model_name, prompt, documents, instruction=''):
+        """Handle complete generate response"""
+        scored_docs = []
+        for idx, doc in enumerate(documents, start=1):
+            logger.info(f"RerankEndpointHandler: processing document {idx}/{len(documents)}")
+
+            score = cls.get_reranker_score(modele_rkllm, prompt, doc, instruction)
+            scored_docs.append((doc, score))
+
+        scored_docs.sort(key=lambda x: x[1], reverse=True)
+
+        response = {
+            "scores": scored_docs
+        }
 
         return jsonify(response), 200
+
+    @classmethod
+    def get_reranker_score(cls, modele_rkllm, prompt, document, instruction=''):
+        run_args = (prompt, )
+        run_kwargs = {"document": document, "instruction": instruction}
+        thread_model = threading.Thread(target=modele_rkllm.run, args=run_args, kwargs=run_kwargs)
+        thread_model.start()
+
+        while thread_model.is_alive():
+            thread_model.join(timeout=0.005)
+
+        global_rerank_logits = variables.global_rerank_logits
+        if global_rerank_logits:
+            logits = global_rerank_logits.logits
+            return cls.calc_reranker_score(logits)
+        else:
+            return 0.0
+
+    @classmethod
+    def calc_reranker_score(cls, logits):
+        try:
+            yes_id, no_id, yes_logit, no_logit = cls.find_best_yes_no_tokens(logits)
+
+            max_logit = max(yes_logit, no_logit)
+            yes_exp = np.exp(yes_logit - max_logit)
+            no_exp = np.exp(no_logit - max_logit)
+
+            sum_exp = yes_exp + no_exp
+            yes_prob = yes_exp / sum_exp
+
+            return float(yes_prob)
+        except Exception as e:
+            logger.warning(f"Error occured when calc reranker score: {e}")
+            return cls.fallback_score_calculation(logits)
+
+    @classmethod
+    def find_best_yes_no_tokens(cls, logits):
+        vocab_size = len(logits)
+
+        yes_token_candidates = [9693]
+        no_token_candidates = [2152]
+
+        # Find max logit of `yes` token.
+        best_yes_id = None
+        best_yes_logit = float('-inf')
+        for token_id in yes_token_candidates:
+            if token_id < vocab_size:
+                if logits[token_id] > best_yes_logit:
+                    best_yes_logit = logits[token_id]
+                    best_yes_id = token_id
+
+        # Find max logit of `no` token.
+        best_no_id = None
+        best_no_logit = float('-inf')
+        for token_id in no_token_candidates:
+            if token_id < vocab_size:
+                if logits[token_id] > best_no_logit:
+                    best_no_logit = logits[token_id]
+                    best_no_id = token_id
+
+        # Use heuristic method if pre-defined `yes`/`no` token cannot found.
+        if best_yes_id is None or best_no_id is None:
+            # Find top-20 highest logits.
+            sorted_indices = np.argsort(logits)[::-1]
+            top_tokens = sorted_indices[:20]
+
+            # Assume larger logit is corresponding to `yes`, and lower is `no`.
+            if best_yes_id is None:
+                best_yes_id = top_tokens[0]
+                best_yes_logit = logits[best_yes_id]
+
+            if best_no_id is None:
+                best_no_id = top_tokens[min(10, len(top_tokens)-1)]
+                best_no_logit = logits[best_no_id]
+
+        return best_yes_id, best_no_id, best_yes_logit, best_no_logit
+
+    @classmethod
+    def fallback_score_calculation(cls, logits):
+        logits_array = np.array(logits)
+
+        softmax_probs = np.exp(logits_array - np.max(logits_array))
+        softmax_probs = softmax_probs / np.sum(softmax_probs)
+
+        entropy = -np.sum(softmax_probs * np.log(softmax_probs + 1e-10))
+        max_entropy = np.log(len(logits))
+        normalized_entropy = entropy / max_entropy
+
+        confidence_score = 1.0 - normalized_entropy
+
+        max_logit_score = (np.max(logits_array) - np.mean(logits_array)) / (np.std(logits_array) + 1e-8)
+        max_logit_score = max(0, min(1, max_logit_score / 10))
+
+        final_score = 0.7 * confidence_score + 0.3 * max_logit_score
+        final_score = max(0.0, min(1.0, final_score))
+
+        return final_score
 
 
 def process_ollama_chat_request(modele_rkllm, model_name, messages, system="", stream=True, format_spec=None, options=None, img_encoder=None):

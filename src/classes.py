@@ -30,6 +30,7 @@ RKLLMInputMode.RKLLM_INPUT_MULTIMODAL  = 3
 RKLLMInferMode = ctypes.c_int
 RKLLMInferMode.RKLLM_INFER_GENERATE = 0
 RKLLMInferMode.RKLLM_INFER_GET_LAST_HIDDEN_LAYER = 1
+RKLLMInferMode.RKLLM_INFER_GET_LOGITS = 2
 
 class RKLLMExtendParam(ctypes.Structure):
     _fields_ = [

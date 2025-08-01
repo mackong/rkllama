@@ -108,3 +108,27 @@ def embed_callback_impl(result_ptr, userdata_ptr, state):
         variables.global_status = state
         print("erreur d'execution")
         sys.stdout.flush()
+
+
+def rerank_callback_impl(result_ptr, userdata_ptr, state):
+    if state == LLMCallState.RKLLM_RUN_NORMAL:
+        variables.global_status = state
+        result = result_ptr.contents
+        logits = result.logits
+        if logits.logits and logits.vocab_size > 0:
+            vocab_size = logits.vocab_size
+            num_tokens = logits.num_tokens
+            if num_tokens > 0:
+                last_logits = np.array([
+                    logits.logits[(num_tokens - 1) * vocab_size + i]
+                    for i in range(vocab_size)
+                ])
+                variables.global_rerank_logits = variables.LogitsResult(
+                    logits=last_logits,
+                    vocab_size=vocab_size,
+                    num_tokens=num_tokens
+                )
+    elif state == LLMCallState.RKLLM_RUN_ERROR:
+        variables.global_status = state
+        print("erreur d'execution")
+        sys.stdout.flush()

@@ -89,10 +89,10 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
     model_dir = os.path.join(config.get_path("models"), model_name)
     
     if not os.path.exists(model_dir):
-        return None, f"Model directory '{model_name}' not found."
+        return None, None, f"Model directory '{model_name}' not found."
     
     if not os.path.exists(os.path.join(model_dir, "Modelfile")) and (huggingface_path is None and From is None):
-        return None, f"Modelfile not found in '{model_name}' directory."
+        return None, None, f"Modelfile not found in '{model_name}' directory."
     elif huggingface_path is not None and From is not None:
         create_modelfile(huggingface_path=huggingface_path, From=From, system=system, temperature=temperature)
         time.sleep(0.1)
@@ -113,7 +113,7 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
     print_color(f"MODEL_TYPE: {model_type}", "green")
     
     if not from_value or not huggingface_path:
-        return None, "FROM or HUGGINGFACE_PATH not defined in Modelfile."
+        return None, None, "FROM or HUGGINGFACE_PATH not defined in Modelfile."
 
     # Change value of model_id with huggingface_path
     variables.model_id = huggingface_path
@@ -123,6 +123,8 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
         model_type, os.path.join(model_dir, from_value), model_dir,
         float(temperature), context_length
     )
+    if modele_rkllm is None:
+        return None, None, f"Failed to initialize model '{model_name}'"
 
     if image_emb_model_path is not None:
         img_encoder = ImageEncoder(image_emb_model_path)
@@ -1144,14 +1146,92 @@ def embeddings_ollama():
         )
 
     except Exception as e:
-        logger.exception("Error in chat_ollama")
+        logger.exception("Error in embeddings_ollama")
         return jsonify({"error": str(e)}), 500
 
     finally:
         # Only release if we acquired it
         if lock_acquired and variables.verrou.locked():
             if DEBUG_MODE:
-                logger.debug("Releasing lock in chat_ollama")
+                logger.debug("Releasing lock in embeddings_ollama")
+            variables.verrou.release()
+
+@app.route('/api/rerank', methods=['POST'])
+def rerank_ollama():
+    global modele_rkllm, current_model
+
+    lock_acquired = False  # Track lock status
+
+    try:
+        data = request.get_json(force=True)
+        model_name = data.get('model')
+        prompt = data.get('prompt', '')
+        documents = data.get('documents', [])
+        instruction = data.get('instruction', '')
+
+        options = data.get('options', {})
+
+        if DEBUG_MODE:
+            logger.debug(f"API rerank request: model={model_name}")
+
+        # Improved model resolution
+        full_model_name = find_model_by_name(model_name)
+        if not full_model_name:
+            if DEBUG_MODE:
+                logger.error(f"Model '{model_name}' not found")
+            return jsonify({"error": f"Model '{model_name}' not found"}), 404
+
+        # Use the full model name for loading
+        model_name = full_model_name
+
+        # Load model if needed
+        if current_model != model_name:
+            if current_model:
+                if DEBUG_MODE:
+                    logger.debug(f"Unloading current model: {current_model}")
+                unload_model()
+
+            if DEBUG_MODE:
+                logger.debug(f"Loading model: {model_name}")
+            modele_instance, _, error = load_model(model_name)
+            if error:
+                if DEBUG_MODE:
+                    logger.error(f"Failed to load model {model_name}: {error}")
+                return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
+            if modele_instance.get_model_type() != RKModelType.RERANKER:
+                if DEBUG_MODE:
+                    logger.error(f"The model {model_name} to load is not an rerank model")
+                return jsonify({"error": f"The model '{model_name}' to load is not an rerank model"}), 500
+
+            modele_rkllm = modele_instance
+            current_model = model_name
+            if DEBUG_MODE:
+                logger.debug(f"Model {model_name} loaded successfully")
+
+        # Acquire lock before processing the request
+        variables.verrou.acquire()
+        lock_acquired = True  # Mark lock as acquired
+
+        # Process the request - this won't release the lock
+        from src.server_utils import RerankEndpointHandler
+        return RerankEndpointHandler.handle_request(
+            modele_rkllm=modele_rkllm,
+            model_name=model_name,
+            prompt=prompt,
+            documents=documents,
+            instruction=instruction,
+            options=options,
+        )
+
+    except Exception as e:
+        logger.exception("Error in rerank_ollama")
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        # Only release if we acquired it
+        if lock_acquired and variables.verrou.locked():
+            if DEBUG_MODE:
+                logger.debug("Releasing lock in rerank_ollama")
             variables.verrou.release()
 
 # Version endpoint for Ollama API compatibility

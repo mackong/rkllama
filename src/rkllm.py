@@ -1,19 +1,22 @@
 import multiprocessing
 import ctypes
+import textwrap
 from abc import ABC, abstractmethod
 from enum import Enum
-from .callback import callback_impl, embed_callback_impl
+from .callback import callback_impl, embed_callback_impl, rerank_callback_impl
 from .classes import *
 
 # Connect the callback function between Python and C++
 callback_type = ctypes.CFUNCTYPE(None, ctypes.POINTER(RKLLMResult), ctypes.c_void_p, ctypes.c_int)
 callback = callback_type(callback_impl)
 embed_callback = callback_type(embed_callback_impl)
+rerank_callback = callback_type(rerank_callback_impl)
 
 
 class RKModelType(Enum):
     LANGUAGE = "language"
     EMBED = "embed"
+    RERANKER = "reranker"
 
 
 class RKModel(ABC):
@@ -197,14 +200,67 @@ class RKEMBED(RKModel):
         self.rkllm_run(self.handle, ctypes.byref(rkllm_input), ctypes.byref(rkllm_infer_params), None)
 
 
+class RKRERANKER(RKModel):
+    def __init__(self, model_path, model_dir, temperature=1.0, context_length=2048, **kwargs):
+        super(RKRERANKER, self).__init__(model_path, model_dir, temperature, context_length, **kwargs)
+
+        rkllm_param = self.rkllm_createDefaultParam()
+        rkllm_param.model_path = bytes(model_path, 'utf-8')
+
+        rkllm_param.max_context_len = context_length
+        rkllm_param.max_new_tokens = 1
+        rkllm_param.top_k = 1
+        rkllm_param.top_p = 1.0
+        rkllm_param.temperature = 0.0
+
+        rkllm_param.extend_param.base_domain_id = 1
+        rkllm_param.extend_param.embed_flash = 0
+        rkllm_param.extend_param.enabled_cpus_num = multiprocessing.cpu_count()
+        rkllm_param.extend_param.enabled_cpus_mask = (1<<(rkllm_param.extend_param.enabled_cpus_num+1))-1
+
+        self.rkllm_init(ctypes.byref(self.handle), ctypes.byref(rkllm_param), rerank_callback)
+
+    def get_model_type(self):
+        return RKModelType.RERANKER
+
+    def format_rerank_input(self, prompt, document, instruction):
+        if not instruction:
+            instruction = 'Given a web search query, retrieve relevant passages that answer the query'
+
+        formatted_input = textwrap.dedent(f"""<Instruct>: {instruction}
+        <Query>: {prompt}
+        <Document>: {document}""")
+        return formatted_input
+
+    def run(self, prompt, **kwargs):
+        _ = self.rkllm_clear_kv_cache(self.handle, ctypes.c_int(0))
+
+        document = kwargs.get("document", "")
+        instruction = kwargs.get("instruction", None)
+        rerank_input = self.format_rerank_input(prompt, document, instruction)
+
+        rkllm_infer_params = RKLLMInferParam()
+        ctypes.memset(ctypes.byref(rkllm_infer_params), 0, ctypes.sizeof(RKLLMInferParam))
+        rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LOGITS
+        rkllm_infer_params.keep_history = 0
+
+        rkllm_input = RKLLMInput()
+        rkllm_input.input_mode = RKLLMInputMode.RKLLM_INPUT_PROMPT
+        rkllm_input.input_data.prompt_input = ctypes.c_char_p(rerank_input.encode("utf-8"))
+
+        self.rkllm_run(self.handle, ctypes.byref(rkllm_input), ctypes.byref(rkllm_infer_params), None)
+
+
 class RKModelFactory:
     @classmethod
     def create_model(cls, model_type, model_path, model_dir, temperature=0.8, context_length=2048, **kwargs) -> RKModel:
-        if model_type == RKModelType.LANGUAGE:
-            model_cls = RKLLM
-        elif model_type == RKModelType.EMBED:
-            model_cls = RKEMBED
-        else:
+        model_classes = {
+            RKModelType.LANGUAGE: RKLLM,
+            RKModelType.EMBED: RKEMBED,
+            RKModelType.RERANKER: RKRERANKER,
+        }
+        model_cls = model_classes.get(model_type, None)
+        if not model_cls:
             return None
 
         return model_cls(model_path, model_dir, temperature, context_length, **kwargs)
