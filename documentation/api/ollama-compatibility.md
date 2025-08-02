@@ -16,8 +16,9 @@ RKLLAMA now implements an Ollama-compatible API, providing an interface that mat
 | `/api/delete` | DELETE | Delete a model | ✅ |
 | `/api/generate` | POST | Generate a completion | ✅ |
 | `/api/chat` | POST | Generate a chat completion | ✅ |
-| `/api/embeddings` | POST | Generate embeddings | ❌ Not implemented |
+| `/api/embeddings` | POST | Generate embeddings | ✅ |
 | `/api/embed` | POST | Generate embeddings | ❌ Not implemented |
+| `/api/rerank` | POST | Rerank document scores | ✅ |
 
 ## Usage Examples
 
@@ -44,6 +45,70 @@ curl -X POST http://localhost:8080/api/generate -d '{
   "prompt": "Write a poem about AI"
 }'
 ```
+
+### Generate Embeddings (`/api/embeddings`)
+
+This endpoint is used for generate embeddings for a prompt:
+
+```bash
+curl -X POST http://localhost:8080/api/embeddings -d '{
+  "model": "Qwen3-Embedding-0.6B_W8A8_RK3588",
+  "prompt": "What is the capital of China?"
+}'
+```
+
+Response like:
+```json
+{
+  "embedding": [
+    -0.07492150782553514,
+    -0.0005481026958273948,
+    -0.005530112881487222,
+    -0.004405116877649514,
+    0.0013207140529182097,
+    -0.0246007981018471,
+    0.0388100613696313,
+    -0.10218408203542528,
+    -0.07558312074362279,
+    -0.011990026536975796
+  ]
+}
+```
+
+*NOTE*: In Modelfile of embedding models, must setting `MODEL_TYPE="embed"`.
+
+### Rerank Document Scores (`/api/rerank`)
+
+This endpoint is used for rerank document scores:
+
+```bash
+curl -X POST http://localhost:8080/api/rerank -d '{
+  "model": "Qwen3-Reranker-0.6B_W8A8_RK3588",
+  "prompt": "What is the capital of China?",
+  "documents": [
+      "The capital of China is Beijing.",
+      "Gravity is a force that attracts two bodies towards each other. It gives weight to physical objects and is responsible for the movement of planets around the sun."
+  ]
+}'
+```
+
+Response like:
+```json
+{
+  "scores": [
+    {
+      "document": "The capital of China is Beijing.",
+      "score": 0.9950627462305758
+    },
+    {
+      "document": "Gravity is a force that attracts two bodies towards each other. It gives weight to physical objects and is responsible for the movement of planets around the sun.",
+      "score": 0.011146341665756624
+    }
+  ]
+}
+```
+
+*NOTE*: In Modelfile of reranker models, must setting `MODEL_TYPE="reranker"`.
 
 ### List Models
 
@@ -99,10 +164,11 @@ Recent updates have significantly improved streaming reliability:
 
 - Only core endpoints (`/api/chat` and `/api/generate`) are fully implemented
 - Pull and Create endpoints have basic implementations
-- Embeddings API is not currently implemented
+- Embeddings API have basic implementations
 - Some advanced Ollama formatting features are not yet supported
 - Not all Ollama clients have been tested for compatibility
 - OpenAI API compatibility is still in development
+- Additional Rerank API have basic implementations
 
 ## Troubleshooting Tips
 
