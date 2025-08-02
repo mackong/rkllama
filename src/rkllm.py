@@ -51,6 +51,10 @@ class RKModel(ABC):
         self.rkllm_clear_kv_cache.argtypes = [RKLLM_Handle_t, ctypes.c_int]
         self.rkllm_clear_kv_cache.restype = ctypes.c_int
 
+        self.rkllm_set_chat_template = rkllm_lib.rkllm_set_chat_template
+        self.rkllm_set_chat_template.argtypes = [RKLLM_Handle_t, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p]
+        self.rkllm_set_chat_template.restype = ctypes.c_int
+
     @abstractmethod
     def get_model_type(self) -> RKModelType:
         pass
@@ -182,6 +186,13 @@ class RKEMBED(RKModel):
 
         self.rkllm_init(ctypes.byref(self.handle), ctypes.byref(rkllm_param), embed_callback)
 
+        self.rkllm_set_chat_template(
+            self.handle,
+            ctypes.c_char_p(b""),  # system prompt
+            ctypes.c_char_p(b""),  # prompt prefix
+            ctypes.c_char_p(b""),  # prompt postfix
+        )
+
     def get_model_type(self):
         return RKModelType.EMBED
 
@@ -219,6 +230,13 @@ class RKRERANKER(RKModel):
         rkllm_param.extend_param.enabled_cpus_mask = (1<<(rkllm_param.extend_param.enabled_cpus_num+1))-1
 
         self.rkllm_init(ctypes.byref(self.handle), ctypes.byref(rkllm_param), rerank_callback)
+
+        self.rkllm_set_chat_template(
+            self.handle,
+            ctypes.c_char_p(b""),  # system prompt
+            ctypes.c_char_p(b""),  # prompt prefix
+            ctypes.c_char_p(b""),  # prompt postfix
+        )
 
     def get_model_type(self):
         return RKModelType.RERANKER

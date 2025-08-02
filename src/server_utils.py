@@ -644,9 +644,9 @@ class RerankEndpointHandler(EndpointHandler):
             logger.info(f"RerankEndpointHandler: processing document {idx}/{len(documents)}")
 
             score = cls.get_reranker_score(modele_rkllm, prompt, doc, instruction)
-            scored_docs.append((doc, score))
+            scored_docs.append({"document": doc, "score": score})
 
-        scored_docs.sort(key=lambda x: x[1], reverse=True)
+        scored_docs.sort(key=lambda x: x["score"], reverse=True)
 
         response = {
             "scores": scored_docs
