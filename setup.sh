@@ -18,6 +18,9 @@ CONFIG_DIR="$APP_ROOT/config"
 # Create config directory if it doesn't exist
 mkdir -p "$CONFIG_DIR"
 
+# Install system packages
+apt install libgl1-mesa-glx
+
 # Check for the argument to disable Miniconda
 USE_CONDA=true
 CONDA_ARG="" # This will hold "--no-conda" if conda is disabled
@@ -29,7 +32,7 @@ fi
 
 # Miniconda installation path
 MINICONDA_DIR=~/miniconda3
-MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh"
+MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-py311_25.7.0-2-Linux-aarch64.sh"
 
 # Install Miniconda (if enabled)
 if $USE_CONDA; then

@@ -54,7 +54,7 @@ def load_tokenizer(modelfile: str, model_id: str) -> Optional[AutoTokenizer]:
 
 
 
-def Request(modele_rkllm, modelfile, img_encoder=None, custom_request=None):
+def Request(modele_rkllm, modelfile, custom_request=None):
     """
     Process a request to the language model
     
@@ -143,25 +143,25 @@ def Request(modele_rkllm, modelfile, img_encoder=None, custom_request=None):
 
             # TODO: multiple images?
             images = messages[-1].get("images", [])
-            if images and img_encoder:
+            if images:
                 # Must have "<image"> token added.
                 prompt[-1]["content"] = "<image>" + prompt[-1].get("content", "")
-                img_emb = img_encoder.encode_image(images[0])
             else:
                 for m in prompt:
                     if not m.get("content", ""):
                         m["content"] = variables.default_text_content
-                img_emb = None
             # Mise en place du chat Template
             prompt_tokens = tokenizer.apply_chat_template(prompt, tokenize=True, add_generation_prompt=True)
             prompt = tokenizer.decode(prompt_tokens)
             llmResponse["usage"]["prompt_tokens"] = llmResponse["usage"]["total_tokens"] = len(prompt_tokens)
 
             sortie_rkllm = ""
+            run_args = (prompt, )
+            run_kwargs = {"images": images}
 
             if "stream" in data.keys() and data["stream"] == True:
                 def generate():
-                    thread_modele = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
+                    thread_modele = threading.Thread(target=modele_rkllm.run, args=run_args, kwargs=run_kwargs)
                     thread_modele.start()
 
                     thread_model_finished = False
@@ -351,7 +351,7 @@ def Request(modele_rkllm, modelfile, img_encoder=None, custom_request=None):
             # For non-streaming responses
             else:
                 # Create inference thread
-                thread_modele = threading.Thread(target=modele_rkllm.run, args=(prompt, img_emb, ))
+                thread_modele = threading.Thread(target=modele_rkllm.run, args=run_args, kwargs=run_kwargs)
                 try:
                     thread_modele.start()
                     print("Inference thread started")
