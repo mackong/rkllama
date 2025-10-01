@@ -21,11 +21,11 @@ LLMCallState.RKLLM_RUN_FINISH   = 2
 LLMCallState.RKLLM_RUN_ERROR    = 3
 LLMCallState.RKLLM_RUN_GET_LAST_HIDDEN_LAYER = 4
 
-RKLLMInputMode = ctypes.c_int
-RKLLMInputMode.RKLLM_INPUT_PROMPT      = 0
-RKLLMInputMode.RKLLM_INPUT_TOKEN       = 1
-RKLLMInputMode.RKLLM_INPUT_EMBED       = 2
-RKLLMInputMode.RKLLM_INPUT_MULTIMODAL  = 3
+RKLLMInputType = ctypes.c_int
+RKLLMInputType.RKLLM_INPUT_PROMPT      = 0
+RKLLMInputType.RKLLM_INPUT_TOKEN       = 1
+RKLLMInputType.RKLLM_INPUT_EMBED       = 2
+RKLLMInputType.RKLLM_INPUT_MULTIMODAL  = 3
 
 RKLLMInferMode = ctypes.c_int
 RKLLMInferMode.RKLLM_INFER_GENERATE = 0
@@ -38,7 +38,9 @@ class RKLLMExtendParam(ctypes.Structure):
         ("embed_flash", ctypes.c_int8),
         ("enabled_cpus_num", ctypes.c_int8),
         ("enabled_cpus_mask", ctypes.c_int32),
-        ("reserved", ctypes.c_uint8 * 106)
+        ("n_batch", ctypes.c_uint8),
+        ("use_cross_attn", ctypes.c_int8),
+        ("reserved", ctypes.c_uint8 * 104)
     ]
 
 class RKLLMParam(ctypes.Structure):
@@ -103,7 +105,9 @@ class RKLLMInputUnion(ctypes.Union):
 
 class RKLLMInput(ctypes.Structure):
     _fields_ = [
-        ("input_mode", ctypes.c_int),
+        ("role", ctypes.c_char_p),
+        ("enable_thinking", ctypes.c_bool),
+        ("input_type", RKLLMInputType),
         ("input_data", RKLLMInputUnion)
     ]
 
@@ -140,10 +144,20 @@ class RKLLMResultLogits(ctypes.Structure):
         ("num_tokens", ctypes.c_int)
     ]
 
+class RKLLMPerfStat(ctypes.Structure):
+    _fields_ = [
+        ("prefill_time_ms", ctypes.c_float),
+        ("prefill_tokens", ctypes.c_int),
+        ("generate_time_ms", ctypes.c_float),
+        ("generate_tokens", ctypes.c_int),
+        ("memory_usage_mb", ctypes.c_float)
+    ]
+
 class RKLLMResult(ctypes.Structure):
     _fields_ = [
         ("text", ctypes.c_char_p),
-        ("size", ctypes.c_int),
+        ("token_id", ctypes.c_int),
         ("last_hidden_layer", RKLLMResultLastHiddenLayer),
-        ("logits", RKLLMResultLogits)
+        ("logits", RKLLMResultLogits),
+        ("perf", RKLLMPerfStat)
     ]

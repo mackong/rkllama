@@ -86,6 +86,26 @@ def callback_impl(resultat, donnees_utilisateur, etat):
         sys.stdout.flush()
 
 
+def gui_actor_callback_impl(result_ptr, userdata_ptr, state):
+    if state == LLMCallState.RKLLM_RUN_NORMAL:
+        variables.global_status = state
+        result = result_ptr.contents
+        last_hidden_layer = result.last_hidden_layer
+        if last_hidden_layer.hidden_states and last_hidden_layer.embd_size > 0:
+            hidden_size = last_hidden_layer.embd_size
+            num_tokens = last_hidden_layer.num_tokens
+            if num_tokens > 0:
+                hidden_array = np.ctypeslib.as_array(
+                    last_hidden_layer.hidden_states,
+                    shape=(num_tokens, hidden_size)
+                ).copy()
+                variables.global_gui_actor_result = hidden_array
+    elif state == LLMCallState.RKLLM_RUN_ERROR:
+        variables.global_status = state
+        print("erreur d'execution")
+        sys.stdout.flush()
+
+
 def embed_callback_impl(result_ptr, userdata_ptr, state):
     if state == LLMCallState.RKLLM_RUN_NORMAL:
         variables.global_status = state

@@ -23,6 +23,7 @@ class LogitsResult:
 isLocked = False
 global_status = -1
 global_text = []
+global_gui_actor_result = None
 global_embed: EmbedResult = None
 global_rerank_logits: LogitsResult = None
 split_byte_data = bytes(b"")

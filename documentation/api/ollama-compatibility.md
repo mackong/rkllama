@@ -19,6 +19,7 @@ RKLLAMA now implements an Ollama-compatible API, providing an interface that mat
 | `/api/embeddings` | POST | Generate embeddings | ✅ |
 | `/api/embed` | POST | Generate embeddings | ❌ Not implemented |
 | `/api/rerank` | POST | Rerank document scores | ✅ |
+| `/api/gui_actor` | POST | Gui Actor | ✅ |
 
 ## Usage Examples
 
@@ -109,6 +110,27 @@ Response like:
 ```
 
 *NOTE*: In Modelfile of reranker models, must setting `MODEL_TYPE="reranker"`.
+
+### Gui Actor (`/api/gui_actor`)
+
+This endpoint is used for gui actor:
+
+```bash
+curl -X POST http://localhost:8080/api/gui_actor -d "{
+  \"model\": \"Qwen2.5-VL-3B_W8A8_RK3588\",
+  \"prompt\": \"refresh dir\",
+  \"image\": \"$(base64 -w 0 image.jpg)\"
+}"
+```
+
+Response like:
+```json
+{
+  "image": "base64 image data"
+}
+```
+
+*NOTE*: In Modelfile of gui actor models, must setting `VISION_ENCODER_PATH="vision_encoder.rknn"` and `POINTER_HEAD_PATH="pointer_head.rknn"`.
 
 ### List Models
 

@@ -18,6 +18,9 @@ CONFIG_DIR="$APP_ROOT/config"
 # Create config directory if it doesn't exist
 mkdir -p "$CONFIG_DIR"
 
+# Install system packages
+apt install libgl1-mesa-glx
+
 # Check for the argument to disable Miniconda
 USE_CONDA=true
 CONDA_ARG="" # This will hold "--no-conda" if conda is disabled
@@ -29,7 +32,7 @@ fi
 
 # Miniconda installation path
 MINICONDA_DIR=~/miniconda3
-MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-aarch64.sh"
+MINICONDA_URL="https://repo.anaconda.com/miniconda/Miniconda3-py311_25.7.0-2-Linux-aarch64.sh"
 
 # Install Miniconda (if enabled)
 if $USE_CONDA; then
@@ -84,6 +87,10 @@ pip3 install -r "$INSTALL_DIR/requirements.txt"
 echo -e "\e[32m=======Installing Python dependencies=======\e[0m"
 # Add flask-cors to the pip install command
 pip install requests flask huggingface_hub flask-cors python-dotenv transformers
+
+# Add rknn_toolkit_lite2
+pip install https://raw.githubusercontent.com/rockchip-linux/rknn-toolkit2/refs/heads/master/rknn_toolkit_lite2/packages/rknn_toolkit_lite2-1.6.0-cp311-cp311-linux_aarch64.whl
+cp $INSTALL_DIR/lib/librknnrt.so /usr/lib/
 
 # Make client.sh and server.sh executable
 echo -e "${CYAN}Making scripts executable${RESET}"

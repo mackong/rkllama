@@ -10,7 +10,6 @@ from transformers import AutoTokenizer
 # Local file
 from src.classes import *
 from src.rkllm import *
-from src.img_encoder import ImageEncoder
 from src.process import Request
 import src.variables as variables
 from src.server_utils import process_ollama_chat_request, process_ollama_generate_request
@@ -58,7 +57,6 @@ def print_color(message, color):
 
 current_model = None  # Global variable for storing the loaded model
 modele_rkllm = None  # Model instance
-img_encoder = None
 
 
 def create_modelfile(huggingface_path, From, system="", temperature=1.0):
@@ -103,12 +101,18 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
     from_value = os.getenv("FROM")
     image_emb_value = os.environ.pop("IMAGE_EMB_PATH", None)
     image_emb_model_path = os.path.join(model_dir, image_emb_value) if image_emb_value else None
+    vision_encoder_value = os.environ.pop("VISION_ENCODER_PATH", None)
+    vision_encoder_model_path = os.path.join(model_dir, vision_encoder_value) if vision_encoder_value else None
+    pointer_head_value = os.environ.pop("POINTER_HEAD_PATH", None)
+    pointer_head_model_path = os.path.join(model_dir, pointer_head_value) if pointer_head_value else None
     huggingface_path = os.getenv("HUGGINGFACE_PATH")
     model_type = RKModelType(os.environ.pop("MODEL_TYPE", RKModelType.LANGUAGE))
 
     # View config Vars
     print_color(f"FROM: {from_value}", "green")
     print_color(f"IMAGE_EMB_PATH: {image_emb_value}", "green")
+    print_color(f"VISION_ENCODER_PATH: {vision_encoder_value}", "green")
+    print_color(f"POINTER_HEAD_PATH: {pointer_head_value}", "green")
     print_color(f"HuggingFace Path: {huggingface_path}", "green")
     print_color(f"MODEL_TYPE: {model_type}", "green")
     
@@ -121,26 +125,21 @@ def load_model(model_name, huggingface_path=None, system="", temperature=1.0, Fr
 
     modele_rkllm = RKModelFactory.create_model(
         model_type, os.path.join(model_dir, from_value), model_dir,
-        float(temperature), context_length
+        float(temperature), context_length,
+        image_emb_model_path=image_emb_model_path,
+        vision_encoder_model_path=vision_encoder_model_path,
+        pointer_head_model_path=pointer_head_model_path
     )
     if modele_rkllm is None:
         return None, None, f"Failed to initialize model '{model_name}'"
 
-    if image_emb_model_path is not None:
-        img_encoder = ImageEncoder(image_emb_model_path)
-    else:
-        img_encoder = None
-
-    return modele_rkllm, img_encoder, None
+    return modele_rkllm, None
 
 def unload_model():
-    global modele_rkllm, img_encoder
+    global modele_rkllm
     if modele_rkllm:
         modele_rkllm.release()
         modele_rkllm = None
-    if img_encoder:
-        img_encoder.release()
-        img_encoder = None
 
 app = Flask(__name__)
 # Enable CORS for all routes
@@ -273,7 +272,7 @@ def pull_model():
 # Route for loading a model into the NPU
 @app.route('/load_model', methods=['POST'])
 def load_model_route():
-    global current_model, modele_rkllm, img_encoder
+    global current_model, modele_rkllm
 
     # Check if a model is currently loaded
     if modele_rkllm:
@@ -289,9 +288,9 @@ def load_model_route():
 
     # Check if other params like "from" or "huggingface_path" for create modelfile
     if "from" in data or "huggingface_path" in data:
-        modele_rkllm, img_encoder, error = load_model(model_name, From=data["from"], huggingface_path=data["huggingface_path"])
+        modele_rkllm, error = load_model(model_name, From=data["from"], huggingface_path=data["huggingface_path"])
     else:
-        modele_rkllm, img_encoder, error = load_model(model_name)
+        modele_rkllm, error = load_model(model_name)
 
     if error:
         return jsonify({"error": error}), 400
@@ -324,7 +323,7 @@ def get_current_model():
 # Route to make a request to the model
 @app.route('/generate', methods=['POST'])
 def recevoir_message():
-    global modele_rkllm, img_encoder
+    global modele_rkllm
 
     if not modele_rkllm:
         return jsonify({"error": "No models are currently loaded."}), 400
@@ -333,7 +332,7 @@ def recevoir_message():
     modelfile = os.path.join(modele_rkllm.model_dir, "Modelfile")
 
     variables.verrou.acquire()
-    return Request(modele_rkllm, modelfile, img_encoder)
+    return Request(modele_rkllm, modelfile)
 
 # Ollama API compatibility routes
 
@@ -838,7 +837,7 @@ def delete_model_ollama():
 
 @app.route('/api/generate', methods=['POST'])
 def generate_ollama():
-    global modele_rkllm, img_encoder, current_model
+    global modele_rkllm, current_model
     
     lock_acquired = False  # Track lock status
 
@@ -877,7 +876,7 @@ def generate_ollama():
         if current_model != model_name:
             if current_model:
                 unload_model()
-            modele_instance, img_encoder_instance, error = load_model(model_name)
+            modele_instance, error = load_model(model_name)
             if error:
                 return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
             if modele_instance.get_model_type() != RKModelType.LANGUAGE:
@@ -885,7 +884,6 @@ def generate_ollama():
                     logger.error(f"The model {model_name} to load is not a language model")
                 return jsonify({"error": f"The model '{model_name}' to load is not a language model"}), 500
             modele_rkllm = modele_instance
-            img_encoder = img_encoder_instance
             current_model = model_name
 
         # Acquire lock before processing
@@ -902,7 +900,6 @@ def generate_ollama():
             stream=stream,
             format_spec=format_spec,
             options=options,
-            img_encoder=img_encoder,
             images=images,
         )
     except Exception as e:
@@ -917,7 +914,7 @@ def generate_ollama():
 # Also update the chat endpoint for consistency
 @app.route('/api/chat', methods=['POST'])
 def chat_ollama():
-    global modele_rkllm, img_encoder, current_model
+    global modele_rkllm, current_model
     
     lock_acquired = False  # Track lock status
 
@@ -984,7 +981,7 @@ def chat_ollama():
             
             if DEBUG_MODE:
                 logger.debug(f"Loading model: {model_name}")
-            modele_instance, img_encoder_instance, error = load_model(model_name)
+            modele_instance, error = load_model(model_name)
             if error:
                 if DEBUG_MODE:
                     logger.error(f"Failed to load model {model_name}: {error}")
@@ -994,7 +991,6 @@ def chat_ollama():
                     logger.error(f"The model {model_name} to load is not a language model")
                 return jsonify({"error": f"The model '{model_name}' to load is not a language model"}), 500
             modele_rkllm = modele_instance
-            img_encoder = img_encoder_instance
             current_model = model_name
             if DEBUG_MODE:
                 logger.debug(f"Model {model_name} loaded successfully")
@@ -1046,7 +1042,6 @@ def chat_ollama():
             format_spec=format_spec,
             options=options,
             tools=tools,
-            img_encoder=img_encoder,
         )
     
     except Exception as e:
@@ -1081,6 +1076,80 @@ if DEBUG_MODE:
                 "status": "ok",
                 "message": "No issues found in the response format"
             }), 200
+
+
+@app.route('/api/gui_actor', methods=['POST'])
+def gui_actor_ollama():
+    global modele_rkllm, current_model
+
+    lock_acquired = False  # Track lock status
+
+    try:
+        data = request.get_json(force=True)
+        model_name = data.get('model')
+        prompt = data.get('prompt', '')
+        image = data.get('image', None)
+
+        options = data.get('options', {})
+
+        if DEBUG_MODE:
+            logger.debug(f"API gui_actor request: model={model_name}")
+
+        # Improved model resolution
+        full_model_name = find_model_by_name(model_name)
+        if not full_model_name:
+            if DEBUG_MODE:
+                logger.error(f"Model '{model_name}' not found")
+            return jsonify({"error": f"Model '{model_name}' not found"}), 404
+
+        # Use the full model name for loading
+        model_name = full_model_name
+
+        # Load model if needed
+        if current_model != model_name:
+            if current_model:
+                if DEBUG_MODE:
+                    logger.debug(f"Unloading current model: {current_model}")
+                unload_model()
+
+            if DEBUG_MODE:
+                logger.debug(f"Loading model: {model_name}")
+            modele_instance, error = load_model(model_name)
+            if error:
+                if DEBUG_MODE:
+                    logger.error(f"Failed to load model {model_name}: {error}")
+                return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
+
+            modele_rkllm = modele_instance
+            current_model = model_name
+            if DEBUG_MODE:
+                logger.debug(f"Model {model_name} loaded successfully")
+
+        # Acquire lock before processing the request
+        variables.verrou.acquire()
+        lock_acquired = True  # Mark lock as acquired
+
+        # Process the request - this won't release the lock
+        from src.server_utils import GuiActorEndpointHandler
+        return GuiActorEndpointHandler.handle_request(
+            modele_rkllm=modele_rkllm,
+            model_name=model_name,
+            prompt=prompt,
+            image=image,
+            options=options,
+        )
+
+    except Exception as e:
+        logger.exception("Error in gui_actor_ollama")
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        # Only release if we acquired it
+        if lock_acquired and variables.verrou.locked():
+            if DEBUG_MODE:
+                logger.debug("Releasing lock in gui_actor_ollama")
+            variables.verrou.release()
+
 
 @app.route('/api/embeddings', methods=['POST'])
 def embeddings_ollama():
@@ -1117,7 +1186,7 @@ def embeddings_ollama():
 
             if DEBUG_MODE:
                 logger.debug(f"Loading model: {model_name}")
-            modele_instance, _, error = load_model(model_name)
+            modele_instance, error = load_model(model_name)
             if error:
                 if DEBUG_MODE:
                     logger.error(f"Failed to load model {model_name}: {error}")
@@ -1193,7 +1262,7 @@ def rerank_ollama():
 
             if DEBUG_MODE:
                 logger.debug(f"Loading model: {model_name}")
-            modele_instance, _, error = load_model(model_name)
+            modele_instance, error = load_model(model_name)
             if error:
                 if DEBUG_MODE:
                     logger.error(f"Failed to load model {model_name}: {error}")
