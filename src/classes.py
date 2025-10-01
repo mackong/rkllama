@@ -40,7 +40,7 @@ class RKLLMExtendParam(ctypes.Structure):
         ("enabled_cpus_mask", ctypes.c_int32),
         ("n_batch", ctypes.c_uint8),
         ("use_cross_attn", ctypes.c_int8),
-        ("reserved", ctypes.c_uint8 * 106)
+        ("reserved", ctypes.c_uint8 * 104)
     ]
 
 class RKLLMParam(ctypes.Structure):
@@ -158,6 +158,6 @@ class RKLLMResult(ctypes.Structure):
         ("text", ctypes.c_char_p),
         ("token_id", ctypes.c_int),
         ("last_hidden_layer", RKLLMResultLastHiddenLayer),
-        ("logits", RKLLMResultLogits)
+        ("logits", RKLLMResultLogits),
         ("perf", RKLLMPerfStat)
     ]

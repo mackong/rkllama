@@ -88,6 +88,10 @@ echo -e "\e[32m=======Installing Python dependencies=======\e[0m"
 # Add flask-cors to the pip install command
 pip install requests flask huggingface_hub flask-cors python-dotenv transformers
 
+# Add rknn_toolkit_lite2
+pip install https://raw.githubusercontent.com/rockchip-linux/rknn-toolkit2/refs/heads/master/rknn_toolkit_lite2/packages/rknn_toolkit_lite2-1.6.0-cp311-cp311-linux_aarch64.whl
+cp $INSTALL_DIR/lib/librknnrt.so /usr/lib/
+
 # Make client.sh and server.sh executable
 echo -e "${CYAN}Making scripts executable${RESET}"
 chmod +x "$INSTALL_DIR/client.sh"

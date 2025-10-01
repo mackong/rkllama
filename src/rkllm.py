@@ -30,7 +30,7 @@ class RKModelType(Enum):
 
 
 class RKModel(ABC):
-    def __init__(self, model_path, model_dir, temperature=0.8, context_length=2048, **kwargs):
+    def __init__(self, model_path, model_dir, temperature=0.8, context_length=4096, **kwargs):
         self.format_schema = None
         self.format_type = None
         self.format_options = {}
@@ -81,16 +81,16 @@ class RKModel(ABC):
 
 # Define the RKLLM class, which includes initialization, inference, and release operations for the RKLLM model in the dynamic library
 class RKLLM(RKModel):
-    def __init__(self, model_path, model_dir, temperature=0.8, context_length=2048, **kwargs):
+    def __init__(self, model_path, model_dir, temperature=0.8, context_length=4096, **kwargs):
         super(RKLLM, self).__init__(model_path, model_dir, temperature, context_length, **kwargs)
 
         rkllm_param = self.rkllm_createDefaultParam()
         rkllm_param.model_path = bytes(model_path, 'utf-8')
 
         rkllm_param.max_context_len = context_length
-        rkllm_param.max_new_tokens = -1
+        rkllm_param.max_new_tokens = context_length
         rkllm_param.skip_special_token = kwargs.get("skip_special_token", True)
-
+        rkllm_param.n_keep = -1
         rkllm_param.top_k = 1
         rkllm_param.top_p = 0.9
         rkllm_param.temperature = temperature
@@ -111,6 +111,7 @@ class RKLLM(RKModel):
         rkllm_param.extend_param.base_domain_id = kwargs.get("base_domain_id", 0)
         rkllm_param.extend_param.embed_flash = 1
         rkllm_param.extend_param.n_batch = 1
+        rkllm_param.extend_param.use_cross_attn = 0
         rkllm_param.extend_param.enabled_cpus_num = multiprocessing.cpu_count()
         rkllm_param.extend_param.enabled_cpus_mask = (1<<(rkllm_param.extend_param.enabled_cpus_num+1))-1
 
@@ -157,6 +158,7 @@ class RKLLM(RKModel):
         ctypes.memset(ctypes.byref(rkllm_infer_params), 0, ctypes.sizeof(RKLLMInferParam))
         rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GENERATE
         rkllm_infer_params.lora_params = ctypes.byref(rkllm_lora_params) if rkllm_lora_params else None
+        rkllm_infer_params.keep_history = 0
 
         rkllm_input = RKLLMInput()
         rkllm_input.role = b"user"
@@ -194,7 +196,8 @@ class RKLLM_IMG(RKLLM):
         rkllm_infer_params = RKLLMInferParam()
         ctypes.memset(ctypes.byref(rkllm_infer_params), 0, ctypes.sizeof(RKLLMInferParam))
         rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GENERATE
-        rkllm_infer_params.lora_params = ctypes.byref(rkllm_lora_params) if rkllm_lora_params else None
+        rkllm_infer_params.lora_params = None
+        rkllm_infer_params.keep_history = 0
 
         rkllm_input = RKLLMInput()
         rkllm_input.role = b"user"
@@ -497,6 +500,12 @@ pyautogui.click(<|pointer_start|><|pointer_pad|>"""
 
     def release(self):
         super(RKLLM_GUI_ACTOR, self).release()
+        if self.vision_encoder is not None:
+            self.vision_encoder.close()
+            self.vision_encoder = None
+        if self.pointer_head is not None:
+            self.pointer_head.close()
+            self.pointer_head = None
 
 
 class RKEMBED(RKModel):
