@@ -1,10 +1,10 @@
 {
         "librkllmrt.so": {
-                "version": "v1.2.1b1",
-                "md5sum": "c4256cff753cadda3458c0d264e1c8c3"
+                "version": "v1.2.1",
+                "md5sum": "a407935b3d84b3cc35cb05251ca1019c"
         },
         "librknnrt.so": {
-                "version": "v1.2.1b1",
-                "md5sum": "15916ec038270da1c8442c38341d5dbb"
+                "version": "v1.2.1",
+                "md5sum": "a37ee1d5d664c79836bf6e35b7ef6289"
         }
 }
