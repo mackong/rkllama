@@ -287,9 +287,9 @@ class RKLLM_GUI_ACTOR(RKLLM):
             ctypes.byref(rkllm_infer_params), None
         )
 
-    def run_pointer_head(self, hidden_states, input_image_data):
+    def run_pointer_head(self, hidden_states, input_image_data, label=False):
         if self.img_vec_output is None or self.pointer_head is None:
-            return None
+            return None, 0, 0
 
         decoder_hidden_states = hidden_states[-2].reshape(1, -1).astype(np.float32)
         image_embeds = self.img_vec_output.astype(np.float32)
@@ -326,9 +326,11 @@ class RKLLM_GUI_ACTOR(RKLLM):
         px = np.clip(px, 0, w - 1)
         py = np.clip(py, 0, h - 1)
 
-        cv2.drawMarker(img, (px, py), (0, 255, 0), cv2.MARKER_CROSS, 25, 1)
-
-        return self.cv2_to_base64(img)
+        if label:
+            cv2.drawMarker(img, (px, py), (0, 255, 0), cv2.MARKER_CROSS, 25, 1)
+            return self.cv2_to_base64(img), px, py
+        else:
+            return None, px, py
 
     def get_gui_actor_prompt(self, task):
         return f"""<|im_start|>system

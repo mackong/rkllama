@@ -566,7 +566,7 @@ class GuiActorEndpointHandler(EndpointHandler):
     """Handler for /api/gui_actor endpoint requests"""
 
     @classmethod
-    def handle_request(cls, modele_rkllm, model_name, prompt, image=None, options=None):
+    def handle_request(cls, modele_rkllm, model_name, prompt, image=None, label=False, options=None):
         """Process a gui_actor request with proper format handling"""
         simplified_model_name = get_simplified_model_name(model_name)
 
@@ -576,12 +576,12 @@ class GuiActorEndpointHandler(EndpointHandler):
         try:
             variables.global_status = -1
             variables.global_embed = None
-            return cls.handle_complete(modele_rkllm, simplified_model_name, prompt, image)
+            return cls.handle_complete(modele_rkllm, simplified_model_name, prompt, image, label)
         finally:
             pass
 
     @classmethod
-    def handle_complete(cls, modele_rkllm, model_name, prompt, image):
+    def handle_complete(cls, modele_rkllm, model_name, prompt, image, label):
         """Handle complete generate response"""
         start_time = time.time()
 
@@ -599,12 +599,14 @@ class GuiActorEndpointHandler(EndpointHandler):
 
         global_gui_actor_result = variables.global_gui_actor_result
         if global_gui_actor_result is not None:
-            output_image = modele_rkllm.run_pointer_head(global_gui_actor_result, image)
+            output_image, px, py = modele_rkllm.run_pointer_head(global_gui_actor_result, image, label)
         else:
-            output_image = None
+            output_image, px, py = None, 0, 0
 
         response = {
-            "image": output_image
+            "image": output_image,
+            "px": int(px),
+            "py": int(py)
         }
 
         return jsonify(response), 200
