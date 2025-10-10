@@ -1089,6 +1089,7 @@ def gui_actor_ollama():
         model_name = data.get('model')
         prompt = data.get('prompt', '')
         image = data.get('image', None)
+        label = data.get('label', False)
 
         options = data.get('options', {})
 
@@ -1136,6 +1137,7 @@ def gui_actor_ollama():
             model_name=model_name,
             prompt=prompt,
             image=image,
+            label=label,
             options=options,
         )
 

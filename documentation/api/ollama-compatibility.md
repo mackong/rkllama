@@ -119,14 +119,28 @@ This endpoint is used for gui actor:
 curl -X POST http://localhost:8080/api/gui_actor -d "{
   \"model\": \"Qwen2.5-VL-3B_W8A8_RK3588\",
   \"prompt\": \"refresh dir\",
-  \"image\": \"$(base64 -w 0 image.jpg)\"
+  \"image\": \"$(base64 -w 0 image.jpg)\",
+  \"label\": true
 }"
 ```
 
-Response like:
+the label is False by default.
+
+Response like this if label is True:
 ```json
 {
-  "image": "base64 image data"
+  "image": "base64 image data",
+  "px": 100,
+  "py": 100
+}
+```
+
+Response like this if label is False:
+```json
+{
+  "image": None,
+  "px": 100,
+  "py": 100
 }
 ```
 
