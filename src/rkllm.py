@@ -221,7 +221,7 @@ class RKLLM_IMG(RKLLM):
 
 class RKLLM_GUI_ACTOR(RKLLM):
     def __init__(self, model_path, model_dir, temperature=0.8, context_length=2048, **kwargs):
-        kwargs["skip_sepcial_token"] = False
+        kwargs["skip_special_token"] = False
         kwargs["base_domain_id"] = 1
         kwargs["callback"] = gui_actor_callback
         super(RKLLM_GUI_ACTOR, self).__init__(model_path, model_dir, temperature, context_length, **kwargs)
@@ -269,7 +269,7 @@ class RKLLM_GUI_ACTOR(RKLLM):
         rkllm_infer_params = RKLLMInferParam()
         ctypes.memset(ctypes.byref(rkllm_infer_params), 0, ctypes.sizeof(RKLLMInferParam))
         rkllm_infer_params.mode = RKLLMInferMode.RKLLM_INFER_GET_LAST_HIDDEN_LAYER
-        rkllm_infer_params.keep_history = 1
+        rkllm_infer_params.keep_history = 0
 
         rkllm_input = RKLLMInput()
         rkllm_input.role = b"user"
