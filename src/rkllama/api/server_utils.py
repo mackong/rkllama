@@ -4,6 +4,8 @@ import datetime
 import logging
 import os
 import re  # Add import for regex used in JSON extraction
+import threading
+import numpy as np
 import rkllama.api.variables as variables
 from transformers import AutoTokenizer
 from flask import jsonify, Response, stream_with_context
@@ -1013,7 +1015,189 @@ class GenerateTranscriptionsEndpointHandler(EndpointHandler):
 
         # Send the task of generate transcription to the model
         transcription_text = variables.worker_manager_rkllm.generate_transcription(model_name, model_dir, file, language, response_format)
-        
+
         # Return the transcription text
         return transcription_text
-    
+
+
+class GuiActorEndpointHandler(EndpointHandler):
+    """Handler for /api/gui_actor endpoint requests"""
+
+    @classmethod
+    def handle_request(cls, modele_rkllm, model_name, prompt, image=None, label=False, options=None):
+        """Process a gui_actor request with proper format handling"""
+
+        if DEBUG_MODE:
+            logger.debug(f"GuiActorEndpointHandler: processing request for {model_name}")
+
+        try:
+            variables.global_status = -1
+            variables.global_gui_actor_result = None
+            return cls.handle_complete(modele_rkllm, model_name, prompt, image, label)
+        finally:
+            pass
+
+    @classmethod
+    def handle_complete(cls, modele_rkllm, model_name, prompt, image, label):
+        """Handle complete gui_actor response"""
+        start_time = time.time()
+
+        run_args = (prompt, )
+        run_kwargs = {
+            "image": image
+        }
+        thread_model = threading.Thread(target=modele_rkllm.run, args=run_args, kwargs=run_kwargs)
+        thread_model.start()
+
+        while thread_model.is_alive():
+            thread_model.join(timeout=0.005)
+
+        prompt_eval_time = time.time()
+
+        global_gui_actor_result = variables.global_gui_actor_result
+        if global_gui_actor_result is not None:
+            output_image, px, py = modele_rkllm.run_pointer_head(global_gui_actor_result, image, label)
+        else:
+            output_image, px, py = None, 0, 0
+
+        response = {
+            "image": output_image,
+            "px": int(px),
+            "py": int(py)
+        }
+
+        return jsonify(response), 200
+
+
+class RerankEndpointHandler(EndpointHandler):
+    """Handler for /api/rerank endpoint requests"""
+
+    @classmethod
+    def handle_request(cls, modele_rkllm, model_name, prompt, documents, instruction='', options=None):
+        """Process a rerank request with proper format handling"""
+
+        if DEBUG_MODE:
+            logger.debug(f"RerankEndpointHandler: processing request for {model_name}")
+
+        try:
+            variables.global_status = -1
+            variables.global_rerank_logits = None
+            return cls.handle_complete(modele_rkllm, model_name, prompt, documents, instruction)
+        finally:
+            pass
+
+    @classmethod
+    def handle_complete(cls, modele_rkllm, model_name, prompt, documents, instruction=''):
+        """Handle complete rerank response"""
+        scored_docs = []
+        for idx, doc in enumerate(documents, start=1):
+            logger.info(f"RerankEndpointHandler: processing document {idx}/{len(documents)}")
+
+            score = cls.get_reranker_score(modele_rkllm, prompt, doc, instruction)
+            scored_docs.append({"document": doc, "score": score})
+
+        scored_docs.sort(key=lambda x: x["score"], reverse=True)
+
+        response = {
+            "scores": scored_docs
+        }
+
+        return jsonify(response), 200
+
+    @classmethod
+    def get_reranker_score(cls, modele_rkllm, prompt, document, instruction=''):
+        run_args = (prompt, )
+        run_kwargs = {"document": document, "instruction": instruction}
+        thread_model = threading.Thread(target=modele_rkllm.run, args=run_args, kwargs=run_kwargs)
+        thread_model.start()
+
+        while thread_model.is_alive():
+            thread_model.join(timeout=0.005)
+
+        global_rerank_logits = variables.global_rerank_logits
+        if global_rerank_logits:
+            logits = global_rerank_logits.logits
+            return cls.calc_reranker_score(logits)
+        else:
+            return 0.0
+
+    @classmethod
+    def calc_reranker_score(cls, logits):
+        try:
+            yes_id, no_id, yes_logit, no_logit = cls.find_best_yes_no_tokens(logits)
+
+            max_logit = max(yes_logit, no_logit)
+            yes_exp = np.exp(yes_logit - max_logit)
+            no_exp = np.exp(no_logit - max_logit)
+
+            sum_exp = yes_exp + no_exp
+            yes_prob = yes_exp / sum_exp
+
+            return float(yes_prob)
+        except Exception as e:
+            logger.warning(f"Error occurred when calc reranker score: {e}")
+            return cls.fallback_score_calculation(logits)
+
+    @classmethod
+    def find_best_yes_no_tokens(cls, logits):
+        vocab_size = len(logits)
+
+        yes_token_candidates = [9693]
+        no_token_candidates = [2152]
+
+        # Find max logit of `yes` token.
+        best_yes_id = None
+        best_yes_logit = float('-inf')
+        for token_id in yes_token_candidates:
+            if token_id < vocab_size:
+                if logits[token_id] > best_yes_logit:
+                    best_yes_logit = logits[token_id]
+                    best_yes_id = token_id
+
+        # Find max logit of `no` token.
+        best_no_id = None
+        best_no_logit = float('-inf')
+        for token_id in no_token_candidates:
+            if token_id < vocab_size:
+                if logits[token_id] > best_no_logit:
+                    best_no_logit = logits[token_id]
+                    best_no_id = token_id
+
+        # Use heuristic method if pre-defined `yes`/`no` token cannot found.
+        if best_yes_id is None or best_no_id is None:
+            # Find top-20 highest logits.
+            sorted_indices = np.argsort(logits)[::-1]
+            top_tokens = sorted_indices[:20]
+
+            # Assume larger logit is corresponding to `yes`, and lower is `no`.
+            if best_yes_id is None:
+                best_yes_id = top_tokens[0]
+                best_yes_logit = logits[best_yes_id]
+
+            if best_no_id is None:
+                best_no_id = top_tokens[min(10, len(top_tokens)-1)]
+                best_no_logit = logits[best_no_id]
+
+        return best_yes_id, best_no_id, best_yes_logit, best_no_logit
+
+    @classmethod
+    def fallback_score_calculation(cls, logits):
+        logits_array = np.array(logits)
+
+        softmax_probs = np.exp(logits_array - np.max(logits_array))
+        softmax_probs = softmax_probs / np.sum(softmax_probs)
+
+        entropy = -np.sum(softmax_probs * np.log(softmax_probs + 1e-10))
+        max_entropy = np.log(len(logits))
+        normalized_entropy = entropy / max_entropy
+
+        confidence_score = 1.0 - normalized_entropy
+
+        max_logit_score = (np.max(logits_array) - np.mean(logits_array)) / (np.std(logits_array) + 1e-8)
+        max_logit_score = max(0, min(1, max_logit_score / 10))
+
+        final_score = 0.7 * confidence_score + 0.3 * max_logit_score
+        final_score = max(0.0, min(1.0, final_score))
+
+        return final_score
+

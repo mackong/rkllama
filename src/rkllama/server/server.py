@@ -1348,6 +1348,135 @@ def embeddings_ollama():
             variables.verrou.release()
 
 
+@app.route('/api/gui_actor', methods=['POST'])
+def gui_actor_ollama():
+    """GUI Actor endpoint for visual element interaction"""
+    lock_acquired = False
+
+    try:
+        data = request.get_json(force=True)
+        model_name = data.get('model')
+        prompt = data.get('prompt', '')
+        image = data.get('image', None)
+        label = data.get('label', False)
+        options = data.get('options', {})
+
+        if DEBUG_MODE:
+            logger.debug(f"API gui_actor request: model={model_name}")
+
+        # Remove possible namespace in model name
+        model_name = re.search(r'/(.*)', model_name).group(1) if re.search(r'/', model_name) else model_name
+
+        if not model_name:
+            return jsonify({"error": "Missing model name"}), 400
+
+        # Get all model options
+        options = get_model_full_options(model_name, rkllama.config.get_path("models"), options)
+
+        # Load model if needed
+        if not variables.worker_manager_rkllm.exists_model_loaded(model_name):
+            _, error = load_model(model_name, request_options=options)
+            if error:
+                return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
+
+        # Get the worker
+        worker = variables.worker_manager_rkllm.get_worker(model_name)
+        if not worker or not worker.model:
+            return jsonify({"error": f"Model '{model_name}' not loaded"}), 500
+
+        # Acquire lock before processing the request
+        variables.verrou.acquire()
+        lock_acquired = True
+
+        # Process the request
+        from rkllama.api.server_utils import GuiActorEndpointHandler
+        return GuiActorEndpointHandler.handle_request(
+            modele_rkllm=worker.model,
+            model_name=model_name,
+            prompt=prompt,
+            image=image,
+            label=label,
+            options=options
+        )
+
+    except Exception as e:
+        logger.exception("Error in gui_actor_ollama")
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        # Only release if we acquired it
+        if lock_acquired and variables.verrou.locked():
+            if DEBUG_MODE:
+                logger.debug("Releasing lock in gui_actor_ollama")
+            variables.verrou.release()
+
+
+@app.route('/api/rerank', methods=['POST'])
+def rerank_ollama():
+    """Rerank endpoint for document reranking"""
+    lock_acquired = False
+
+    try:
+        data = request.get_json(force=True)
+        model_name = data.get('model')
+        prompt = data.get('prompt', '')
+        documents = data.get('documents', [])
+        instruction = data.get('instruction', '')
+        options = data.get('options', {})
+
+        if DEBUG_MODE:
+            logger.debug(f"API rerank request: model={model_name}")
+
+        # Remove possible namespace in model name
+        model_name = re.search(r'/(.*)', model_name).group(1) if re.search(r'/', model_name) else model_name
+
+        if not model_name:
+            return jsonify({"error": "Missing model name"}), 400
+
+        if not documents:
+            return jsonify({"error": "Missing documents"}), 400
+
+        # Get all model options
+        options = get_model_full_options(model_name, rkllama.config.get_path("models"), options)
+
+        # Load model if needed
+        if not variables.worker_manager_rkllm.exists_model_loaded(model_name):
+            _, error = load_model(model_name, request_options=options)
+            if error:
+                return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
+
+        # Get the worker
+        worker = variables.worker_manager_rkllm.get_worker(model_name)
+        if not worker or not worker.model:
+            return jsonify({"error": f"Model '{model_name}' not loaded"}), 500
+
+        # Acquire lock before processing the request
+        variables.verrou.acquire()
+        lock_acquired = True
+
+        # Process the request
+        from rkllama.api.server_utils import RerankEndpointHandler
+        return RerankEndpointHandler.handle_request(
+            modele_rkllm=worker.model,
+            model_name=model_name,
+            prompt=prompt,
+            documents=documents,
+            instruction=instruction,
+            options=options
+        )
+
+    except Exception as e:
+        logger.exception("Error in rerank_ollama")
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        # Only release if we acquired it
+        if lock_acquired and variables.verrou.locked():
+            if DEBUG_MODE:
+                logger.debug("Releasing lock in rerank_ollama")
+            variables.verrou.release()
+
+
 # Version endpoint for Ollama API compatibility
 @app.route('/api/version', methods=['GET'])
 def ollama_version():
