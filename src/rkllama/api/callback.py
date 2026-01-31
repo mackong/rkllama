@@ -2,15 +2,18 @@ import ctypes, sys
 import numpy as np
 from .classes import *
 from .variables import *
+import rkllama.api.variables as variables
 
 global_status = -1
 global_text = []
 split_byte_data = bytes(b"")
 last_embeddings = []
+last_rerank = []
+last_gui_actor = []
 
 # Definir la fonction de rappel
 def callback_impl(result, userdata, status):
-    global split_byte_data, global_status, global_text, last_embeddings
+    global split_byte_data, global_status, global_text, last_embeddings, last_rerank, last_gui_actor
 
     if status == LLMCallState.RKLLM_RUN_FINISH:
         global_status = status
@@ -34,7 +37,7 @@ def callback_impl(result, userdata, status):
                         text_bytes = bytes(text_bytes)
                     except:
                         text_bytes = b""
-                        
+
                 # Now safely concatenate
                 try:
                     decoded_text = (split_byte_data + text_bytes).decode('utf-8')
@@ -56,8 +59,8 @@ def callback_impl(result, userdata, status):
                     except UnicodeDecodeError:
                         # Still incomplete, keep for next time
                         pass
-            
-            # --- EMBEDDINGS Part---
+
+            # --- EMBEDDINGS Part (also used by GUI Actor) ---
             if result and result.contents and result.contents.last_hidden_layer.hidden_states:
                 num_tokens = result.contents.last_hidden_layer.num_tokens
                 embd_size = result.contents.last_hidden_layer.embd_size
@@ -71,12 +74,33 @@ def callback_impl(result, userdata, status):
                 embeddings = np.ctypeslib.as_array(raw)
                 embeddings = embeddings.reshape(num_tokens, embd_size)
 
-                # Save global
+                # Save global for both embeddings and GUI Actor (they use same hidden states)
                 #last_embeddings = embeddings.copy()
                 last_embeddings.append(embeddings)
-                print(f"\n✅ Embeddings Shape: {embeddings.shape}")
-        
+                last_gui_actor.append(embeddings)
+                print(f"\n✅ Hidden Layer Shape: {embeddings.shape}")
+
+            # --- LOGITS Part (for Rerank) ---
+            if result and result.contents:
+                try:
+                    logits_info = result.contents.logits
+                    if logits_info and logits_info.logits:
+                        vocab_size = logits_info.vocab_size
+                        num_tokens = logits_info.num_tokens
+                        if num_tokens > 0 and vocab_size > 0:
+                            # Extract last token logits
+                            logits_array = np.array([
+                                logits_info.logits[(num_tokens - 1) * vocab_size + i]
+                                for i in range(vocab_size)
+                            ])
+                            # Store in module-level list for worker to access (like last_embeddings)
+                            last_rerank.append(logits_array)
+                            print(f"\n✅ Logits captured: vocab_size={vocab_size}, num_tokens={num_tokens}")
+                except (AttributeError, TypeError) as e:
+                    # Logits might not be available in this mode
+                    pass
+
         except Exception as e:
             print(f"\nError processing callback: {str(e)}", end='')
-            
-        sys.stdout.flush()    
+
+        sys.stdout.flush()
