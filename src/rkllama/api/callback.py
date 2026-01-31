@@ -2,6 +2,7 @@ import ctypes, sys
 import numpy as np
 from .classes import *
 from .variables import *
+import rkllama.api.variables as variables
 
 global_status = -1
 global_text = []
@@ -34,7 +35,7 @@ def callback_impl(result, userdata, status):
                         text_bytes = bytes(text_bytes)
                     except:
                         text_bytes = b""
-                        
+
                 # Now safely concatenate
                 try:
                     decoded_text = (split_byte_data + text_bytes).decode('utf-8')
@@ -56,7 +57,7 @@ def callback_impl(result, userdata, status):
                     except UnicodeDecodeError:
                         # Still incomplete, keep for next time
                         pass
-            
+
             # --- EMBEDDINGS Part---
             if result and result.contents and result.contents.last_hidden_layer.hidden_states:
                 num_tokens = result.contents.last_hidden_layer.num_tokens
@@ -75,8 +76,54 @@ def callback_impl(result, userdata, status):
                 #last_embeddings = embeddings.copy()
                 last_embeddings.append(embeddings)
                 print(f"\n✅ Embeddings Shape: {embeddings.shape}")
-        
+
         except Exception as e:
             print(f"\nError processing callback: {str(e)}", end='')
-            
-        sys.stdout.flush()    
+
+        sys.stdout.flush()
+
+
+def gui_actor_callback_impl(result_ptr, userdata_ptr, state):
+    """Callback for GUI Actor inference"""
+    if state == LLMCallState.RKLLM_RUN_NORMAL:
+        variables.global_status = state
+        result = result_ptr.contents
+        last_hidden_layer = result.last_hidden_layer
+        if last_hidden_layer.hidden_states and last_hidden_layer.embd_size > 0:
+            hidden_size = last_hidden_layer.embd_size
+            num_tokens = last_hidden_layer.num_tokens
+            if num_tokens > 0:
+                hidden_array = np.ctypeslib.as_array(
+                    last_hidden_layer.hidden_states,
+                    shape=(num_tokens, hidden_size)
+                ).copy()
+                variables.global_gui_actor_result = hidden_array
+    elif state == LLMCallState.RKLLM_RUN_ERROR:
+        variables.global_status = state
+        print("erreur d'execution")
+        sys.stdout.flush()
+
+
+def rerank_callback_impl(result_ptr, userdata_ptr, state):
+    """Callback for reranking inference"""
+    if state == LLMCallState.RKLLM_RUN_NORMAL:
+        variables.global_status = state
+        result = result_ptr.contents
+        logits = result.logits
+        if logits.logits and logits.vocab_size > 0:
+            vocab_size = logits.vocab_size
+            num_tokens = logits.num_tokens
+            if num_tokens > 0:
+                last_logits = np.array([
+                    logits.logits[(num_tokens - 1) * vocab_size + i]
+                    for i in range(vocab_size)
+                ])
+                variables.global_rerank_logits = variables.LogitsResult(
+                    logits=last_logits,
+                    vocab_size=vocab_size,
+                    num_tokens=num_tokens
+                )
+    elif state == LLMCallState.RKLLM_RUN_ERROR:
+        variables.global_status = state
+        print("erreur d'execution")
+        sys.stdout.flush()
