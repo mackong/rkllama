@@ -18,6 +18,9 @@ RKLLAMA now implements an Ollama-compatible API, providing an interface that mat
 | `/api/chat` | POST | Generate a chat completion | ✅ **With Tool Calling** |
 | `/api/embeddings` | POST | Generate embeddings | ❌ Not implemented |
 | `/api/embed` | POST | Generate embeddings | ❌ Not implemented |
+| `/api/ocr` | POST | Extract text from images | ✅ |
+| `/api/gui_actor` | POST | GUI element interaction | ✅ |
+| `/api/rerank` | POST | Document reranking | ✅ |
 
 ## Usage Examples
 
@@ -45,6 +48,148 @@ curl -X POST http://localhost:8080/api/generate -d '{
 }'
 ```
 
+### OCR (`/api/ocr`)
+
+This endpoint extracts text from images using a vision-language model:
+
+```bash
+curl -X POST http://localhost:8080/api/ocr -d '{
+  "model": "your-ocr-model",
+  "prompt": "Extract the text content from this image.",
+  "image": "<base64-encoded-image>",
+  "stream": true
+}'
+```
+
+**With file input:**
+
+```bash
+curl -X POST http://localhost:8080/api/ocr -d "{
+  \"model\": \"Dots_W8A8_RK3588\",
+  \"prompt\": \"Extract the text content from this image.\",
+  \"image\": \"$(base64 -w 0 your_image.jpg)\"
+}"
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | ✅ | - | Model name |
+| `image` | string | ✅ | - | Base64-encoded image |
+| `prompt` | string | ❌ | "Extract the text content from this image." | Instruction for OCR |
+| `stream` | boolean | ❌ | true | Enable streaming response |
+
+**Response (streaming):**
+
+```json
+{"model":"your-model","created_at":"2024-01-01T00:00:00.000000Z","response":"Extracted ","done":false}
+{"model":"your-model","created_at":"2024-01-01T00:00:00.000000Z","response":"text ","done":false}
+{"model":"your-model","created_at":"2024-01-01T00:00:00.000000Z","response":"here","done":false}
+{"model":"your-model","created_at":"2024-01-01T00:00:00.000000Z","response":"","done":true,"done_reason":"stop","total_duration":1234567890,"eval_count":10,"eval_duration":1000000000}
+```
+
+**Response (non-streaming):**
+
+```json
+{
+  "model": "your-model",
+  "created_at": "2024-01-01T00:00:00.000000Z",
+  "response": "Extracted text from the image...",
+  "done_reason": "stop",
+  "done": true,
+  "total_duration": 1234567890,
+  "eval_count": 50,
+  "eval_duration": 1000000000
+}
+```
+
+### GUI Actor (`/api/gui_actor`)
+
+This endpoint predicts click coordinates for GUI element interaction based on a screenshot and instruction:
+
+```bash
+curl -X POST http://localhost:8080/api/gui_actor -d '{
+  "model": "Qwen2.5-VL-3B_W8A8_RK3588",
+  "prompt": "Click the search button",
+  "image": "<base64-encoded-screenshot>",
+  "label": true
+}'
+```
+
+**With file input:**
+
+```bash
+curl -X POST http://localhost:8080/api/gui_actor -d "{
+  \"model\": \"Qwen2.5-VL-3B_W8A8_RK3588\",
+  \"prompt\": \"Click the login button\",
+  \"image\": \"$(base64 -w 0 screenshot.png)\",
+  \"label\": true
+}"
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | ✅ | - | Model name |
+| `image` | string | ✅ | - | Base64-encoded screenshot |
+| `prompt` | string | ✅ | - | Instruction describing the element to click |
+| `label` | boolean | ❌ | false | Draw marker on output image |
+
+**Response:**
+
+```json
+{
+  "image": "<base64-encoded-image-with-marker>",
+  "px": 450,
+  "py": 320
+}
+```
+
+- `px`, `py`: Predicted click coordinates
+- `image`: Base64-encoded image with click marker (only if `label: true`, otherwise `null`)
+
+### Rerank (`/api/rerank`)
+
+This endpoint reranks documents based on relevance to a query:
+
+```bash
+curl -X POST http://localhost:8080/api/rerank -d '{
+  "model": "Qwen3-Reranker-0.6B_W8A8_RK3588",
+  "prompt": "What is machine learning?",
+  "documents": [
+    "Machine learning is a subset of artificial intelligence.",
+    "The weather today is sunny.",
+    "Deep learning uses neural networks."
+  ],
+  "instruction": ""
+}'
+```
+
+**Parameters:**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `model` | string | ✅ | - | Model name |
+| `prompt` | string | ✅ | - | Query to match against documents |
+| `documents` | array | ✅ | - | List of documents to rerank |
+| `instruction` | string | ❌ | "" | Optional instruction for reranking |
+
+**Response:**
+
+```json
+{
+  "scores": [
+    {"document": "Machine learning is a subset of artificial intelligence.", "score": 0.95},
+    {"document": "Deep learning uses neural networks.", "score": 0.82},
+    {"document": "The weather today is sunny.", "score": 0.12}
+  ]
+}
+```
+
+Documents are returned sorted by relevance score in descending order.
+
 ### List Models
 
 ```bash
@@ -57,7 +202,7 @@ curl http://localhost:8080/api/tags
 
 ### Features
 - **Multiple Detection Methods**: Works with Qwen's `<tool_call>` tags and generic JSON formats
-- **Streaming Support**: Tool calls work in both streaming and non-streaming modes  
+- **Streaming Support**: Tool calls work in both streaming and non-streaming modes
 - **Format Normalization**: Automatically handles different parameter formats (`parameters` vs `arguments`)
 - **Model Agnostic**: Works with any LLM that can output proper JSON
 
