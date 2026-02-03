@@ -1139,6 +1139,156 @@ pyautogui.click(<|pointer_start|><|pointer_pad|>
         return jsonify(response), 200
 
 
+class OcrEndpointHandler(EndpointHandler):
+    """Handler for /api/ocr endpoint requests"""
+
+    @staticmethod
+    def format_streaming_chunk(model_name, token, is_final=False, metrics=None):
+        """Format a streaming chunk for OCR endpoint"""
+        chunk = {
+            "model": model_name,
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "response": token if not is_final else "",
+            "done": is_final
+        }
+
+        if is_final:
+            chunk["done_reason"] = "stop"
+            if metrics:
+                chunk.update({
+                    "total_duration": metrics["total"],
+                    "eval_count": metrics.get("token_count", 0),
+                    "eval_duration": metrics["eval"]
+                })
+
+        return chunk
+
+    @staticmethod
+    def format_complete_response(model_name, complete_text, metrics):
+        """Format a complete non-streaming response for OCR endpoint"""
+        return {
+            "model": model_name,
+            "created_at": datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+            "response": complete_text,
+            "done_reason": "stop",
+            "done": True,
+            "total_duration": metrics["total"],
+            "eval_count": metrics.get("token_count", 0),
+            "eval_duration": metrics["eval"]
+        }
+
+    @classmethod
+    def handle_request(cls, model_name, prompt, image, stream=True, options=None):
+        """Process an OCR request"""
+
+        if DEBUG_MODE:
+            logger.debug(f"OcrEndpointHandler: processing request for {model_name}")
+
+        try:
+            variables.global_status = -1
+
+            # Format prompt with image tag
+            ocr_prompt = f"<image>{prompt}"
+
+            if stream:
+                return cls.handle_streaming(model_name, ocr_prompt, image)
+            else:
+                return cls.handle_complete(model_name, ocr_prompt, image)
+        finally:
+            pass
+
+    @classmethod
+    def handle_streaming(cls, model_name, prompt, image):
+        """Handle streaming OCR response"""
+
+        # Send the OCR task to the model
+        variables.worker_manager_rkllm.ocr(model_name, prompt, [image])
+        # Clear the cache to prevent image embedding problems
+        variables.worker_manager_rkllm.clear_cache_worker(model_name)
+
+        # Wait for result queue
+        result_q = variables.worker_manager_rkllm.get_result(model_name)
+        finished_inference_token = variables.worker_manager_rkllm.get_finished_inference_token()
+
+        def generate():
+            count = 0
+            start_time = time.time()
+            eval_start_time = None
+            complete_text = ""
+            final_sent = False
+            thread_finished = False
+
+            while not thread_finished or not final_sent:
+                token = result_q.get(timeout=300)
+                if token == finished_inference_token:
+                    thread_finished = True
+
+                if not thread_finished:
+                    count += 1
+                    if count == 1:
+                        eval_start_time = time.time()
+
+                    complete_text += token
+
+                    if variables.global_status != 1:
+                        chunk = cls.format_streaming_chunk(model_name, token)
+                        yield f"{json.dumps(chunk)}\n"
+
+                if thread_finished and not final_sent:
+                    final_sent = True
+
+                    end_time = time.time()
+                    metrics = {
+                        "total": int((end_time - start_time) * 1e9),
+                        "eval": int((end_time - (eval_start_time or start_time)) * 1e9),
+                        "token_count": count
+                    }
+
+                    final_chunk = cls.format_streaming_chunk(model_name, "", True, metrics)
+                    yield f"{json.dumps(final_chunk)}\n"
+
+        return Response(generate(), content_type='application/x-ndjson')
+
+    @classmethod
+    def handle_complete(cls, model_name, prompt, image):
+        """Handle complete OCR response"""
+
+        # Send the OCR task to the model
+        variables.worker_manager_rkllm.ocr(model_name, prompt, [image])
+        # Clear the cache to prevent image embedding problems
+        variables.worker_manager_rkllm.clear_cache_worker(model_name)
+
+        # Wait for result queue
+        result_q = variables.worker_manager_rkllm.get_result(model_name)
+        finished_inference_token = variables.worker_manager_rkllm.get_finished_inference_token()
+
+        count = 0
+        start_time = time.time()
+        eval_start_time = None
+        complete_text = ""
+        thread_finished = False
+
+        while not thread_finished:
+            token = result_q.get(timeout=300)
+            if token == finished_inference_token:
+                thread_finished = True
+            else:
+                count += 1
+                if count == 1:
+                    eval_start_time = time.time()
+                complete_text += token
+
+        end_time = time.time()
+        metrics = {
+            "total": int((end_time - start_time) * 1e9),
+            "eval": int((end_time - (eval_start_time or start_time)) * 1e9),
+            "token_count": count
+        }
+
+        response = cls.format_complete_response(model_name, complete_text, metrics)
+        return jsonify(response), 200
+
+
 class RerankEndpointHandler(EndpointHandler):
     """Handler for /api/rerank endpoint requests"""
 

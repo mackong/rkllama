@@ -26,6 +26,8 @@ WORKER_TASK_INFERENCE = "INFERENCE"
 WORKER_TASK_VISION_ENCODER = "VISION_ENCODER"
 WORKER_TASK_GUI_ACTOR_VISION_ENCODER = "GUI_ACTOR_VISION_ENCODER"
 WORKER_TASK_GUI_ACTOR_POINTER_HEAD = "GUI_ACTOR_POINTER_HEAD"
+WORKER_TASK_OCR = "OCR"
+WORKER_TASK_OCR_VISION_ENCODER = "OCR_VISION_ENCODER"
 WORKER_TASK_FINISHED = "<RKLLM_TASK_FINISHED>"
 WORKER_TASK_ERROR = "<RKLLM_TASK_ERROR>"
 WORKER_TASK_ABORT_INFERENCE = "ABORT"
@@ -112,6 +114,27 @@ def run_gui_actor_pointer_head_worker(model_input, rknn_queue):
 
     # Send the result to the main process
     rknn_queue.put(result)
+
+
+def run_ocr_encoder(model_input, rknn_queue):
+    """
+    Run the OCR vision encoder to get the image embedding
+    Args:
+        model_input (tuple): (model_encoder_path, images_source, image_width, image_height)
+        rknn_queue (Queue): Queue to return the image embedding
+    Returns:
+        np.ndarray: Image embedding
+    """
+    from .rknnlite import run_ocr_vision_encoder
+
+    # Get the arguments for the call
+    model_encoder_path, images_source, image_width, image_height = model_input
+
+    # Run the OCR vision encoder to get the image embedding
+    image_embedding = run_ocr_vision_encoder(model_encoder_path, images_source, image_width, image_height)
+
+    # Send the encoded image to the main process
+    rknn_queue.put(image_embedding)
 
 
 def run_image_generator(model_input, rknn_queue):
@@ -399,6 +422,26 @@ def run_rkllm_worker(name, task_queue: Queue, result_queue: Queue, model_path, m
 
                 # Send the result
                 result_queue.put(pointer_result)
+
+            elif task == WORKER_TASK_OCR_VISION_ENCODER:
+                logger.info(f"Running OCR vision encoder for model {name}...")
+                # Run the OCR vision encoder to get the image embedding
+                rknn_queue = Queue()
+
+                # Define the process for the OCR encoder
+                rknn_process = Process(target=run_ocr_encoder, args=(model_input, rknn_queue,))
+
+                # Start the encoder worker
+                rknn_process.start()
+
+                # Get the encoded image from the queue
+                img_encoded = rknn_queue.get(timeout=120)  # Timeout after 120 seconds
+
+                # Terminate the process encoder after use
+                rknn_process.terminate()
+
+                # Send the encoded image
+                result_queue.put(img_encoded)
 
             else:
                 result_queue.put(f"Unknown task: {task}")
@@ -867,6 +910,90 @@ class WorkerManager:
             return pointer_result
 
         return {'px': 0, 'py': 0, 'labeled_image': None}
+
+
+    def ocr(self, model_name, prompt_input, images):
+        """
+        Run OCR pipeline: vision encoder -> multimodal text generation
+
+        Args:
+            model_name (str): Model name to invoke
+            prompt_input (str): Input prompt (should contain <image> tag)
+            images (list): List of images for vision encoder
+
+        Note:
+            This method sends the inference task but does not wait for completion.
+            The generated text is streamed via callbacks.
+        """
+        if model_name in self.workers.keys():
+
+            # Get model paths
+            models_dir = rkllama.config.get_path("models")
+            model_encoder_path = get_encoder_model_path(model_name)
+
+            # Check if the encoder model is available
+            if model_encoder_path is None:
+                raise RuntimeError(f"No encoder model (.rknn) found for : {model_name}")
+
+            # Get properties of the encoder model
+            image_width = int(get_property_modelfile(model_name, 'IMAGE_WIDTH', models_dir))
+            image_height = int(get_property_modelfile(model_name, 'IMAGE_HEIGHT', models_dir))
+            n_image_tokens = int(get_property_modelfile(model_name, 'N_IMAGE_TOKENS', models_dir))
+            num_images = len(images)
+
+            # Step 1: Get image embeddings with expand2square processing
+            image_embed = self.get_ocr_images_embed(model_name, model_encoder_path, images, image_width, image_height)
+
+            # Check if the image was encoded correctly
+            if image_embed is None:
+                raise RuntimeError(f"Unexpected error encoding image for model : {model_name}")
+
+            # Prepare all the inputs for the multimodal inference
+            model_input = (prompt_input, image_embed, n_image_tokens, image_width, image_height, num_images)
+
+            # Step 2: Send the inference task for text generation (streaming via callbacks)
+            self.send_task(model_name, (WORKER_TASK_INFERENCE, RKLLMInferMode.RKLLM_INFER_GENERATE, RKLLMInputType.RKLLM_INPUT_MULTIMODAL, model_input))
+
+
+    def get_ocr_images_embed(self, model_name, model_encoder_path, images, image_width, image_height):
+        """
+        Send an OCR vision encoder task to the corresponding model worker
+
+        Args:
+            model_name (str): Model name to invoke
+            model_encoder_path (str): Path of the vision encoder model
+            images (list): List of image paths/base64/urls
+            image_width (int): Width of the image
+            image_height (int): Height of the image
+
+        Returns:
+            np.ndarray: Image embedding
+        """
+        if model_name in self.workers.keys():
+
+            # Get model encoder size
+            model_encoder_size = os.path.getsize(model_encoder_path)
+            # Check if available memory in server for encoder
+            if not self.is_memory_available_for_model(model_encoder_size):
+                # Unload the oldest model until memory available
+                self.unload_oldest_models_from_memory(model_encoder_size)
+
+            # Prepare the input for the OCR vision encoder
+            model_input = (model_encoder_path, images, image_width, image_height)
+
+            # Send the OCR Encoder task
+            self.send_task(model_name, (WORKER_TASK_OCR_VISION_ENCODER, None, None, model_input))
+
+            # Wait to confirm output of the image encoder
+            image_embed = self.workers[model_name].result_q.get(timeout=120)  # Timeout after 120 seconds
+
+            if isinstance(image_embed, str) and image_embed == WORKER_TASK_ERROR:
+                # Error encoding the image
+                return None
+
+            return image_embed
+
+        return None
 
 
     def multimodal(self, model_name, prompt_input, images):

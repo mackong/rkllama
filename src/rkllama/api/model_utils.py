@@ -511,9 +511,9 @@ def get_encoder_model_path(model_name: str) -> Union[str, None]:
     models_dir = rkllama.config.get_path("models")
     model_path = os.path.join(models_dir, model_name)
 
-    config_path = os.path.join(model_path, get_property_modelfile(model_name, "VISION_ENCODER_PATH", models_dir))
-    if config_path:
-        return config_path
+    path_from_config = get_property_modelfile(model_name, "VISION_ENCODER_PATH", models_dir)
+    if path_from_config:
+        return os.path.join(model_path, path_from_config)
 
     # check for the RKNN file
     encoder_filename = None

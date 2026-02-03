@@ -225,6 +225,100 @@ def run_gui_actor_vision_encoder(model_encoder_path, images_source, image_width,
     }
 
 
+def expand2square(img, background_color=(127.5, 127.5, 127.5)):
+    """
+    Expand the image into a square and fill it with the specified background color.
+
+    Args:
+        img: Input image (RGB)
+        background_color: Background color for padding
+
+    Returns:
+        np.ndarray: Square image
+    """
+    height, width = img.shape[:2]
+    if width == height:
+        return img.copy()
+
+    size = max(width, height)
+    square_img = np.full((size, size, 3), background_color, dtype=np.uint8)
+
+    x_offset = (size - width) // 2
+    y_offset = (size - height) // 2
+
+    square_img[y_offset:y_offset+height, x_offset:x_offset+width] = img
+    return square_img
+
+
+def prepare_image_for_ocr(image_source, image_width, image_height):
+    """
+    Load and preprocess an image for OCR with expand2square processing
+
+    Args:
+        image_source: Path, URL, or Base64 string of the image.
+        image_width: Target width for resizing.
+        image_height: Target height for resizing.
+
+    Returns:
+        np.ndarray: Preprocessed image tensor
+    """
+    # Read image
+    img = load_image(image_source)  # RGB
+    if img is None:
+        raise FileNotFoundError(image_source)
+
+    # Expand to square
+    square_img = expand2square(img)
+
+    # Resize to target dimensions
+    resized_img = cv2.resize(square_img, (image_width, image_height), interpolation=cv2.INTER_LINEAR)
+
+    # Normalize
+    input_tensor = resized_img.astype(np.float32)
+    input_tensor = (input_tensor / 255.0 - np.array([0.48145466, 0.4578275, 0.40821073])) / np.array([0.26862954, 0.26130258, 0.27577711])
+    input_tensor = np.expand_dims(input_tensor, axis=0).astype(np.float32)
+
+    return input_tensor
+
+
+def run_ocr_vision_encoder(model_encoder_path, images_source, image_width, image_height):
+    """
+    Run the OCR vision encoder to get the image embedding
+
+    Args:
+        model_encoder_path (str): Path of the encoder
+        images_source (list): List of image sources (base64, PATH or URL)
+        image_width (int): Width of the image
+        image_height (int): Height of the image
+
+    Returns:
+        np.ndarray: Image embedding
+    """
+    # Prepare images (OCR only supports single image)
+    if len(images_source) > 1:
+        logger.warning(f"OCR vision encoder received {len(images_source)} images, using only the first one")
+
+    image_source = images_source[0]
+    img_prepared = prepare_image_for_ocr(image_source, image_width, image_height)
+
+    # Init encoder
+    vision_encoder = RKNNLite(verbose=False)
+    vision_encoder.load_rknn(model_encoder_path)
+    vision_encoder.init_runtime()
+
+    # Inference
+    image_embedding = vision_encoder.inference(inputs=[img_prepared.astype(np.float32)], data_type="float32", data_format="nhwc")[0]
+    logger.debug(f"OCR image embedding shape: {image_embedding.shape}")
+
+    # Convert to float32
+    image_embedding = image_embedding.astype(np.float32)
+
+    # Release RKNNLite resources
+    vision_encoder.release()
+
+    return image_embedding
+
+
 def base64_to_cv2(image_data):
     """Convert base64 string to cv2 image"""
     nparr = np.frombuffer(base64.b64decode(image_data), np.uint8)

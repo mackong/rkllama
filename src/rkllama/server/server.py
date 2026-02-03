@@ -1414,6 +1414,75 @@ def gui_actor_ollama():
             variables.verrou.release()
 
 
+@app.route('/api/ocr', methods=['POST'])
+def ocr_ollama():
+    """OCR endpoint for text extraction from images"""
+    lock_acquired = False
+
+    try:
+        data = request.get_json(force=True)
+        model_name = data.get('model')
+        prompt = data.get('prompt', 'Extract the text content from this image.')
+        image = data.get('image', None)
+        stream = data.get('stream', True)
+        options = data.get('options', {})
+
+        if DEBUG_MODE:
+            logger.debug(f"API ocr request: model={model_name}")
+
+        # Remove possible namespace in model name
+        model_name = re.search(r'/(.*)', model_name).group(1) if re.search(r'/', model_name) else model_name
+
+        if not model_name:
+            return jsonify({"error": "Missing model name"}), 400
+
+        if not image:
+            return jsonify({"error": "Missing image"}), 400
+
+        # Get all model options
+        options = get_model_full_options(model_name, rkllama.config.get_path("models"), options)
+
+        options = options | {
+            "system_prompt": "",
+            "prompt_prefix": "",
+            "prompt_postfix": "<|assistant|>",
+            "img_start": "<|img|>",
+            "img_end": "<|endofimg|>",
+            "img_content": "<|imgpad|>"
+        }
+
+        # Load model if needed
+        if not variables.worker_manager_rkllm.exists_model_loaded(model_name):
+            _, error = load_model(model_name, request_options=options)
+            if error:
+                return jsonify({"error": f"Failed to load model '{model_name}': {error}"}), 500
+
+        # Acquire lock before processing the request
+        variables.verrou.acquire()
+        lock_acquired = True
+
+        # Process the request
+        from rkllama.api.server_utils import OcrEndpointHandler
+        return OcrEndpointHandler.handle_request(
+            model_name=model_name,
+            prompt=prompt,
+            image=image,
+            stream=stream,
+            options=options
+        )
+
+    except Exception as e:
+        logger.exception("Error in ocr_ollama")
+        return jsonify({"error": str(e)}), 500
+
+    finally:
+        # Only release if we acquired it
+        if lock_acquired and variables.verrou.locked():
+            if DEBUG_MODE:
+                logger.debug("Releasing lock in ocr_ollama")
+            variables.verrou.release()
+
+
 @app.route('/api/rerank', methods=['POST'])
 def rerank_ollama():
     """Rerank endpoint for document reranking"""
